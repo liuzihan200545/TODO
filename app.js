@@ -338,8 +338,40 @@ function stripMarkdownInline(text) {
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
     .trim();
+}
+
+function appendMarkdownInline(target, text) {
+  const pattern = /(!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      target.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+
+    if (match[2] !== undefined && match[3] !== undefined && !match[1].startsWith('!')) {
+      const a = document.createElement('a');
+      a.href = match[3];
+      a.textContent = match[2] || match[3];
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      target.appendChild(a);
+    } else if (match[4]) {
+      target.appendChild(document.createTextNode(match[4]));
+    } else {
+      const strong = document.createElement('strong');
+      strong.textContent = match[5] || match[6] || '';
+      target.appendChild(strong);
+    }
+
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    target.appendChild(document.createTextNode(text.slice(lastIndex)));
+  }
 }
 
 function parseRoadmapMarkdown(markdown, fileName) {
@@ -391,7 +423,8 @@ function parseRoadmapMarkdown(markdown, fileName) {
         id: 'roadmap_' + Date.now() + '_' + items.length,
         type: 'heading',
         level,
-        text,
+        text: heading[2].trim(),
+        plainText: text,
       });
       return;
     }
@@ -402,7 +435,7 @@ function parseRoadmapMarkdown(markdown, fileName) {
         id: 'roadmap_' + Date.now() + '_' + items.length,
         type: 'task',
         done: task[1].toLowerCase() === 'x',
-        text: stripMarkdownInline(task[2]),
+        text: task[2].trim(),
       });
       return;
     }
@@ -412,7 +445,7 @@ function parseRoadmapMarkdown(markdown, fileName) {
       items.push({
         id: 'roadmap_' + Date.now() + '_' + items.length,
         type: 'bullet',
-        text: stripMarkdownInline(bullet[1]),
+        text: bullet[1].trim(),
       });
       return;
     }
@@ -420,7 +453,7 @@ function parseRoadmapMarkdown(markdown, fileName) {
     items.push({
       id: 'roadmap_' + Date.now() + '_' + items.length,
       type: 'text',
-      text: stripMarkdownInline(line),
+      text: line.trim(),
     });
   });
 
@@ -489,7 +522,7 @@ function renderRoadmap() {
 
     if (item.type === 'heading') {
       block.classList.add('roadmap-heading', 'level-' + Math.min(item.level, 4));
-      block.textContent = item.text;
+      appendMarkdownInline(block, item.text);
     } else if (item.type === 'task') {
       block.classList.add('roadmap-task');
       if (item.done) block.classList.add('done');
@@ -503,12 +536,12 @@ function renderRoadmap() {
       });
       const text = document.createElement('div');
       text.className = 'roadmap-task-text';
-      text.textContent = item.text;
+      appendMarkdownInline(text, item.text);
       block.appendChild(check);
       block.appendChild(text);
     } else {
       block.classList.add(item.type === 'bullet' ? 'roadmap-bullet' : 'roadmap-text');
-      block.textContent = item.text;
+      appendMarkdownInline(block, item.text);
     }
 
     view.appendChild(block);

@@ -519,6 +519,7 @@ body {
   background: var(--hero-bg, var(--accent-gradient));
   background-size: cover;
   background-position: center;
+  background-attachment: fixed;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -528,9 +529,15 @@ body {
 }
 
 .hero {
-  background: transparent;
-  padding: 28px 24px 72px;
-  position: relative;
+  background: var(--hero-bg, var(--accent-gradient));
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  padding: 28px 24px 24px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.14);
 }
 
 .hero h1 {
@@ -740,7 +747,7 @@ body {
 .content {
   flex: 1;
   padding: 0 20px 20px;
-  margin-top: -50px;
+  margin-top: 0;
   position: relative;
   z-index: 1;
 }
@@ -1112,6 +1119,16 @@ body {
   font-size: 14px;
   line-height: 1.65;
   white-space: pre-wrap;
+}
+
+.roadmap-view a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.roadmap-view a:hover {
+  text-decoration: underline;
 }
 
 .roadmap-bullet {
