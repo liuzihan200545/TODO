@@ -193,6 +193,87 @@ body {
 
 .sidebar .theme-toggle:hover { background: var(--bg-nav-hover); color: var(--accent); }
 
+.sync-panel {
+  margin: 0 4px 14px;
+  padding: 10px;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--bg-main);
+}
+
+.sync-form,
+.sync-user {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-form[hidden],
+.sync-user[hidden] {
+  display: none;
+}
+
+.sync-form input {
+  width: 100%;
+  border: 1px solid var(--border-divider);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+  padding: 7px 9px;
+}
+
+.sync-form input::placeholder { color: var(--text-tertiary); }
+.sync-form input:focus { border-color: var(--accent); }
+
+.sync-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sync-actions button {
+  flex: 1;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-btn-hover);
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 8px;
+}
+
+.sync-actions button:hover {
+  background: var(--bg-nav-hover);
+}
+
+.sync-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sync-email {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-status {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 8px;
+}
+
+.sync-status.ok { color: var(--accent); }
+.sync-status.error { color: var(--danger); }
+
 .sidebar .nav {
   list-style: none;
 }

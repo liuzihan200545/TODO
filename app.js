@@ -1,6 +1,17 @@
 const html = document.documentElement;
 const themeToggle = document.getElementById('themeToggle');
 
+const SUPABASE_URL = 'https://ocdllhgizeevgobypmbl.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_PUEyB8EFcjGirdo_oUfb_Q_-CmrwWwB';
+const SNAPSHOT_VERSION = 1;
+
+var currentUser = null;
+var syncReady = false;
+var syncTimer = null;
+var suppressSync = false;
+var supabaseClient = null;
+var appBootstrapped = false;
+
 function getTheme() {
   const saved = localStorage.getItem('theme');
   if (saved) return saved;
@@ -18,6 +29,7 @@ function applyTheme(t) {
     themeToggle.title = '切换为深色模式';
   }
   localStorage.setItem('theme', t);
+  scheduleCloudSync();
 }
 
 applyTheme(getTheme());
@@ -52,6 +64,7 @@ usernameEl.addEventListener('click', () => {
       usernameEl.textContent = newName;
       avatarEl.textContent = newName.charAt(0).toUpperCase();
       localStorage.setItem('username', newName);
+      scheduleCloudSync();
     }
     input.replaceWith(usernameEl);
   };
@@ -91,6 +104,16 @@ const createListBtn = document.getElementById('createListBtn');
 const importRoadmapBtn = document.getElementById('importRoadmapBtn');
 const roadmapFileInput = document.getElementById('roadmapFileInput');
 const roadmapProjectsEl = document.getElementById('roadmapProjects');
+const syncForm = document.getElementById('syncForm');
+const syncUser = document.getElementById('syncUser');
+const syncEmail = document.getElementById('syncEmail');
+const syncPassword = document.getElementById('syncPassword');
+const syncLoginBtn = document.getElementById('syncLoginBtn');
+const syncSignupBtn = document.getElementById('syncSignupBtn');
+const syncUserEmail = document.getElementById('syncUserEmail');
+const manualSyncBtn = document.getElementById('manualSyncBtn');
+const syncLogoutBtn = document.getElementById('syncLogoutBtn');
+const syncStatus = document.getElementById('syncStatus');
 
 let searchQuery = '';
 let activeListId = 'tasks';
@@ -124,6 +147,7 @@ function loadLists() {
 
 function saveLists(listsData) {
   localStorage.setItem('todoLists', JSON.stringify(listsData));
+  scheduleCloudSync();
 }
 
 const loadedLists = loadLists();
@@ -152,6 +176,7 @@ function loadRoadmapProjects() {
 
 function saveRoadmapProjects() {
   localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
+  scheduleCloudSync();
 }
 
 let roadmapProjects = loadRoadmapProjects();
@@ -266,8 +291,9 @@ function renderSidebar() {
       const id = btn.dataset.id;
       if (confirm('确定删除此列表及其所有任务？')) {
         lists = lists.filter(l => l.id !== id);
+        saveLists(lists);
         if (activeListId === id) switchToList('tasks');
-        else { saveLists(lists); renderSidebar(); render(); }
+        else { renderSidebar(); render(); }
       }
     });
   });
@@ -314,6 +340,7 @@ function renderRoadmapProjects() {
 function switchToList(id) {
   activeListId = id;
   localStorage.setItem('activeListId', id);
+  scheduleCloudSync();
   const def = defaultLists.find(d => d.id === id);
   const roadmap = getActiveRoadmap();
   const l = def || roadmap || lists.find(x => x.id === id);
@@ -942,6 +969,7 @@ function getCustomImages() {
 
 function saveCustomImages(imgs) {
   localStorage.setItem('customBgs', JSON.stringify(imgs));
+  scheduleCloudSync();
 }
 
 let bgIndex = parseInt(localStorage.getItem('bgIndex')) || 0;
@@ -986,6 +1014,7 @@ fileInput.addEventListener('change', () => {
     customIdx = imgs.length - 1;
     localStorage.setItem('bgType', 'custom');
     localStorage.setItem('customBgIdx', customIdx);
+    scheduleCloudSync();
     applyBackground();
     openPicker();
   };
@@ -1061,6 +1090,7 @@ function openPicker() {
     localStorage.setItem('bgType', bgType);
     localStorage.setItem('bgIndex', bgIndex);
     localStorage.setItem('customBgIdx', customIdx);
+    scheduleCloudSync();
     applyBackground();
     overlay.querySelectorAll('.swatch, .custom-swatch').forEach(s => s.classList.remove('selected'));
     swatch.classList.add('selected');
@@ -1077,6 +1107,7 @@ function openPicker() {
       customIdx = parseInt(swatch.dataset.index);
       localStorage.setItem('bgType', 'custom');
       localStorage.setItem('customBgIdx', customIdx);
+      scheduleCloudSync();
       applyBackground();
       overlay.querySelectorAll('.swatch, .custom-swatch').forEach(s => s.classList.remove('selected'));
       swatch.classList.add('selected');
@@ -1095,6 +1126,7 @@ function openPicker() {
           else if (customIdx >= imgs.length) customIdx = imgs.length - 1;
           localStorage.setItem('bgType', bgType);
           localStorage.setItem('customBgIdx', customIdx);
+          scheduleCloudSync();
         }
         applyBackground();
         openPicker();
@@ -1111,6 +1143,7 @@ function openPicker() {
     opacityVal.textContent = Math.round(opacitySlider.value * 100) + '%';
     localStorage.setItem('cardOpacity', opacitySlider.value);
     localStorage.setItem('cardBlur', Math.round((1 - opacitySlider.value) * 26));
+    scheduleCloudSync();
   });
 
   document.body.appendChild(overlay);
@@ -1123,4 +1156,340 @@ function closePicker() {
   setTimeout(() => overlay.remove(), 150);
 }
 
+function setSyncStatus(message, type) {
+  if (!syncStatus) return;
+  syncStatus.textContent = message;
+  syncStatus.classList.toggle('ok', type === 'ok');
+  syncStatus.classList.toggle('error', type === 'error');
+}
+
+function getErrorMessage(error, fallback) {
+  if (!error) return fallback;
+  return error.message || error.details || error.hint || String(error) || fallback;
+}
+
+function setSyncBusy(isBusy) {
+  [syncLoginBtn, syncSignupBtn, manualSyncBtn, syncLogoutBtn].forEach(btn => {
+    if (btn) btn.disabled = isBusy;
+  });
+}
+
+function updateAuthUI() {
+  const signedIn = Boolean(currentUser);
+  syncForm.hidden = signedIn;
+  syncUser.hidden = !signedIn;
+  syncUserEmail.textContent = signedIn ? currentUser.email : '';
+}
+
+function getSettingValue(key, fallback) {
+  const value = localStorage.getItem(key);
+  return value === null ? fallback : value;
+}
+
+function buildSnapshot() {
+  return {
+    version: SNAPSHOT_VERSION,
+    todoLists: lists,
+    roadmapProjects,
+    settings: {
+      theme: getTheme(),
+      username: usernameEl.textContent || 'Lenovo',
+      activeListId,
+      bgType,
+      bgIndex,
+      customBgs: getCustomImages(),
+      customBgIdx: customIdx,
+      cardOpacity: getSettingValue('cardOpacity', '0.92'),
+      cardBlur: getSettingValue('cardBlur', '8'),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function hasLocalUserData(snapshot) {
+  const hasTodos = snapshot.todoLists.some(l => {
+    const isDefault = defaultLists.some(d => d.id === l.id);
+    return l.todos.length > 0 || !isDefault;
+  });
+  const hasRoadmaps = snapshot.roadmapProjects.length > 0;
+  const settings = snapshot.settings;
+  const hasCustomSettings = settings.username !== 'Lenovo'
+    || settings.theme !== (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    || settings.bgType !== 'preset'
+    || Number(settings.bgIndex) !== 0
+    || settings.customBgs.length > 0
+    || settings.cardOpacity !== '0.92'
+    || settings.cardBlur !== '8';
+  return hasTodos || hasRoadmaps || hasCustomSettings;
+}
+
+function saveLocalSnapshot(snapshot) {
+  localStorage.setItem('appSnapshot', JSON.stringify(snapshot || buildSnapshot()));
+}
+
+function applySnapshot(snapshot) {
+  if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) {
+    throw new Error('不支持的云端数据版本');
+  }
+
+  suppressSync = true;
+  try {
+    const settings = snapshot.settings || {};
+    lists = Array.isArray(snapshot.todoLists) ? snapshot.todoLists.filter(l => l.id !== 'roadmap') : loadLists();
+    roadmapProjects = Array.isArray(snapshot.roadmapProjects) ? snapshot.roadmapProjects : [];
+
+    localStorage.setItem('todoLists', JSON.stringify(lists));
+    localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
+
+    if (settings.theme) applyTheme(settings.theme);
+    if (settings.username) {
+      usernameEl.textContent = settings.username;
+      avatarEl.textContent = settings.username.charAt(0).toUpperCase();
+      localStorage.setItem('username', settings.username);
+    }
+
+    bgType = settings.bgType || 'preset';
+    bgIndex = Number.isFinite(Number(settings.bgIndex)) ? Number(settings.bgIndex) : 0;
+    customIdx = Number.isFinite(Number(settings.customBgIdx)) ? Number(settings.customBgIdx) : 0;
+    localStorage.setItem('bgType', bgType);
+    localStorage.setItem('bgIndex', bgIndex);
+    localStorage.setItem('customBgIdx', customIdx);
+    localStorage.setItem('customBgs', JSON.stringify(Array.isArray(settings.customBgs) ? settings.customBgs : []));
+
+    const cardOpacity = settings.cardOpacity || '0.92';
+    const cardBlur = settings.cardBlur || '8';
+    localStorage.setItem('cardOpacity', cardOpacity);
+    localStorage.setItem('cardBlur', cardBlur);
+    document.documentElement.style.setProperty('--card-opacity', cardOpacity);
+    document.documentElement.style.setProperty('--card-blur', cardBlur + 'px');
+
+    activeListId = settings.activeListId || 'tasks';
+    if (isRoadmapView(activeListId) && !getActiveRoadmap()) activeListId = 'tasks';
+    if (!isRoadmapView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
+      activeListId = 'tasks';
+    }
+    localStorage.setItem('activeListId', activeListId);
+
+    applyBackground();
+    saveLocalSnapshot(snapshot);
+    switchToList(activeListId);
+  } finally {
+    suppressSync = false;
+  }
+}
+
+async function loadCloudSnapshot() {
+  if (!supabaseClient || !currentUser) return null;
+  const { data, error } = await supabaseClient
+    .from('app_snapshots')
+    .select('data, updated_at')
+    .eq('user_id', currentUser.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data ? data.data : null;
+}
+
+async function saveCloudSnapshot(snapshot) {
+  if (!supabaseClient || !currentUser) return;
+  const nextSnapshot = snapshot || buildSnapshot();
+  nextSnapshot.updatedAt = new Date().toISOString();
+  saveLocalSnapshot(nextSnapshot);
+
+  setSyncStatus('正在同步...', '');
+  const { error } = await supabaseClient
+    .from('app_snapshots')
+    .upsert({
+      user_id: currentUser.id,
+      data: nextSnapshot,
+      updated_at: nextSnapshot.updatedAt,
+    }, { onConflict: 'user_id' });
+
+  if (error) throw error;
+  setSyncStatus('已同步', 'ok');
+}
+
+function scheduleCloudSync() {
+  if (suppressSync || !appBootstrapped) return;
+  if (!currentUser || !syncReady) {
+    try { saveLocalSnapshot(buildSnapshot()); } catch (e) {}
+    return;
+  }
+  window.clearTimeout(syncTimer);
+  syncTimer = window.setTimeout(() => {
+    saveCloudSnapshot().catch(() => {
+      setSyncStatus('本地已保存，云端同步失败，请点同步重试', 'error');
+    });
+  }, 900);
+}
+
+async function handleSignedIn(user) {
+  currentUser = user;
+  syncReady = false;
+  updateAuthUI();
+  setSyncStatus('正在读取云端...', '');
+
+  try {
+    const cloudSnapshot = await loadCloudSnapshot();
+    const localSnapshot = buildSnapshot();
+    const resolvedKey = 'syncResolved:' + currentUser.id;
+    const hasResolved = localStorage.getItem(resolvedKey) === '1';
+
+    if (!cloudSnapshot) {
+      await saveCloudSnapshot(localSnapshot);
+      localStorage.setItem(resolvedKey, '1');
+    } else if (hasLocalUserData(localSnapshot) && !hasResolved) {
+      const useCloud = confirm('云端已有数据。点击“确定”使用云端数据覆盖本地；点击“取消”上传本地数据覆盖云端。');
+      if (useCloud) {
+        applySnapshot(cloudSnapshot);
+        setSyncStatus('已加载云端数据', 'ok');
+      } else {
+        await saveCloudSnapshot(localSnapshot);
+      }
+      localStorage.setItem(resolvedKey, '1');
+    } else {
+      applySnapshot(cloudSnapshot);
+      setSyncStatus('已加载云端数据', 'ok');
+    }
+
+    syncReady = true;
+  } catch (error) {
+    syncReady = true;
+    setSyncStatus('云端同步初始化失败：' + getErrorMessage(error, '未知错误'), 'error');
+    console.error(error);
+  }
+}
+
+function handleSignedOut() {
+  currentUser = null;
+  syncReady = false;
+  updateAuthUI();
+  setSyncStatus('未登录，本地保存', '');
+}
+
+function getAuthFields() {
+  return {
+    email: syncEmail.value.trim(),
+    password: syncPassword.value,
+  };
+}
+
+async function signUp() {
+  if (!supabaseClient) return;
+  const { email, password } = getAuthFields();
+  if (!email || !password) {
+    setSyncStatus('请输入邮箱和密码', 'error');
+    return;
+  }
+  setSyncBusy(true);
+  setSyncStatus('正在注册...', '');
+  try {
+    const { data, error } = await supabaseClient.auth.signUp({ email, password });
+    if (error) throw error;
+    if (data.session && data.user && (!currentUser || currentUser.id !== data.user.id)) {
+      await handleSignedIn(data.user);
+      setSyncStatus('注册成功，已同步', 'ok');
+    } else {
+      setSyncStatus('注册成功，请检查邮箱确认后再登录', 'ok');
+    }
+  } catch (error) {
+    setSyncStatus(error.message || '注册失败', 'error');
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function signIn() {
+  if (!supabaseClient) return;
+  const { email, password } = getAuthFields();
+  if (!email || !password) {
+    setSyncStatus('请输入邮箱和密码', 'error');
+    return;
+  }
+  setSyncBusy(true);
+  setSyncStatus('正在登录...', '');
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    if (data.user && (!currentUser || currentUser.id !== data.user.id)) await handleSignedIn(data.user);
+  } catch (error) {
+    setSyncStatus(error.message || '登录失败', 'error');
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function signOut() {
+  if (!supabaseClient) return;
+  setSyncBusy(true);
+  try {
+    await supabaseClient.auth.signOut();
+    handleSignedOut();
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function manualSync() {
+  if (!currentUser || !syncReady) {
+    setSyncStatus('请先登录', 'error');
+    return;
+  }
+  try {
+    await saveCloudSnapshot();
+  } catch (error) {
+    setSyncStatus('本地已保存，云端同步失败：' + getErrorMessage(error, '未知错误'), 'error');
+  }
+}
+
+async function initSupabaseSync() {
+  updateAuthUI();
+
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    setSyncStatus('Supabase 未配置，本地保存', 'error');
+    return;
+  }
+
+  if (!window.supabase || !window.supabase.createClient) {
+    setSyncStatus('Supabase SDK 加载失败', 'error');
+    return;
+  }
+
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
+
+  syncLoginBtn.addEventListener('click', signIn);
+  syncSignupBtn.addEventListener('click', signUp);
+  syncLogoutBtn.addEventListener('click', signOut);
+  manualSyncBtn.addEventListener('click', manualSync);
+  [syncEmail, syncPassword].forEach(el => {
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') signIn();
+    });
+  });
+
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') handleSignedOut();
+    if (event === 'SIGNED_IN' && session && (!currentUser || currentUser.id !== session.user.id)) {
+      handleSignedIn(session.user);
+    }
+  });
+
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error) {
+    setSyncStatus(error.message || '读取登录状态失败', 'error');
+    return;
+  }
+
+  if (data.session) await handleSignedIn(data.session.user);
+  else handleSignedOut();
+}
+
 bgBtn.addEventListener('click', openPicker);
+appBootstrapped = true;
+initSupabaseSync();

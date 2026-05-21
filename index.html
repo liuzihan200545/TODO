@@ -17,6 +17,25 @@
         </button>
       </div>
 
+      <div class="sync-panel">
+        <div class="sync-form" id="syncForm">
+          <input type="email" id="syncEmail" placeholder="邮箱">
+          <input type="password" id="syncPassword" placeholder="密码">
+          <div class="sync-actions">
+            <button id="syncLoginBtn">登录</button>
+            <button id="syncSignupBtn">注册</button>
+          </div>
+        </div>
+        <div class="sync-user" id="syncUser" hidden>
+          <div class="sync-email" id="syncUserEmail"></div>
+          <div class="sync-actions">
+            <button id="manualSyncBtn">同步</button>
+            <button id="syncLogoutBtn">退出</button>
+          </div>
+        </div>
+        <div class="sync-status" id="syncStatus">未登录，本地保存</div>
+      </div>
+
       <div class="search-box">
         <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></span>
         <input type="text" id="searchInput" placeholder="搜索任务">
@@ -87,6 +106,7 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="app.js"></script>
 </body>
 </html>
