@@ -556,7 +556,9 @@ function renderRoadmap() {
       const check = document.createElement('span');
       check.className = 'check';
       check.addEventListener('click', () => {
+        const wasDone = item.done;
         item.done = !item.done;
+        if (!wasDone && item.done) ding();
         saveRoadmapProjects();
         renderRoadmap();
         renderSidebar();
