@@ -106,6 +106,7 @@ const roadmapFileInput = document.getElementById('roadmapFileInput');
 const roadmapProjectsEl = document.getElementById('roadmapProjects');
 const addVideoBtn = document.getElementById('addVideoBtn');
 const videoProjectsEl = document.getElementById('videoProjects');
+const videoLabel = document.querySelector('.video-label');
 const syncForm = document.getElementById('syncForm');
 const syncUser = document.getElementById('syncUser');
 const syncEmail = document.getElementById('syncEmail');
@@ -186,17 +187,106 @@ let roadmapProjects = loadRoadmapProjects();
 function loadVideoProjects() {
   try {
     const projects = JSON.parse(localStorage.getItem('videoProjects')) || [];
-    if (Array.isArray(projects)) return projects;
+    if (Array.isArray(projects)) return projects.map(normalizeVideoProject);
   } catch (e) {}
   return [];
 }
 
 function saveVideoProjects() {
+  videoProjects = videoProjects.map(normalizeVideoProject);
   localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
   scheduleCloudSync();
 }
 
 let videoProjects = loadVideoProjects();
+
+function clampPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function parseBvid(url) {
+  const text = String(url || '');
+  const match = text.match(/\b(BV[a-zA-Z0-9]{8,})\b/i);
+  return match ? match[1] : '';
+}
+
+function normalizeBvid(input) {
+  const bvid = parseBvid(input);
+  return bvid ? 'BV' + bvid.slice(2) : '';
+}
+
+function getBilibiliVideoUrl(bvid) {
+  return 'https://www.bilibili.com/video/' + encodeURIComponent(bvid);
+}
+
+function normalizeCoverUrl(url) {
+  if (!url) return '';
+  const text = String(url).trim();
+  if (!text) return '';
+  if (text.includes('images.weserv.nl')) return text;
+  if (text.startsWith('//')) return 'https:' + text;
+  const httpsUrl = text.startsWith('http://') ? 'https://' + text.slice('http://'.length) : text;
+  try {
+    const parsed = new URL(httpsUrl);
+    if (parsed.hostname.endsWith('hdslb.com')) {
+      return 'https://images.weserv.nl/?url=' + encodeURIComponent(parsed.hostname + parsed.pathname + parsed.search);
+    }
+  } catch (e) {}
+  return httpsUrl;
+}
+
+function normalizeVideoProject(video) {
+  video = video || {};
+  const nowIso = new Date().toISOString();
+  const progress = clampPercent(video.progressPercent !== undefined ? video.progressPercent : (video.done ? 100 : 0));
+  return {
+    id: video.id || 'video_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    title: video.title || getBilibiliVideoTitle(video.url || ''),
+    url: video.url || '',
+    bvid: normalizeBvid(video.bvid || video.url || ''),
+    cover: normalizeCoverUrl(video.cover || ''),
+    duration: Number.isFinite(Number(video.duration)) ? Math.max(0, Math.round(Number(video.duration))) : 0,
+    progressPercent: progress,
+    done: video.done === true || progress >= 100,
+    createdAt: video.createdAt || nowIso,
+    updatedAt: video.updatedAt || video.createdAt || nowIso,
+  };
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function parseDurationInput(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  if (/^\d+$/.test(text)) return Number(text);
+  const parts = text.split(':').map(part => Number(part));
+  if (parts.some(part => !Number.isFinite(part) || part < 0)) return 0;
+  if (parts.length === 2) return Math.round(parts[0] * 60 + parts[1]);
+  if (parts.length === 3) return Math.round(parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  return 0;
+}
+
+function getVideoProgress(video) {
+  return clampPercent(video && video.progressPercent);
+}
+
+function getVideoStats() {
+  const total = videoProjects.length;
+  const done = videoProjects.filter(video => normalizeVideoProject(video).done).length;
+  const avg = total
+    ? Math.round(videoProjects.reduce((sum, video) => sum + getVideoProgress(video), 0) / total)
+    : 0;
+  return { total, done, avg };
+}
 
 function getActiveList() {
   if (isVideoView(activeListId)) return null;
@@ -373,6 +463,7 @@ function renderVideoProjects() {
   videoProjectsEl.innerHTML = '';
 
   videoProjects.forEach(video => {
+    video = normalizeVideoProject(video);
     const li = document.createElement('li');
     const listId = 'video:' + video.id;
     li.className = activeListId === listId ? 'active' : '';
@@ -382,6 +473,7 @@ function renderVideoProjects() {
       <span class="count">${video.done ? '✓' : ''}</span>
       <button class="del-video" data-id="${video.id}" title="删除视频">&times;</button>`;
     li.querySelector('.video-name').textContent = video.title;
+    li.querySelector('.count').textContent = getVideoProgress(video) ? getVideoProgress(video) + '%' : '';
     li.addEventListener('click', (e) => {
       if (e.target.classList.contains('del-video')) return;
       switchToList(listId);
@@ -416,7 +508,7 @@ function switchToList(id) {
   const l = def || roadmap || video || lists.find(x => x.id === id);
   if (l) listTitle.textContent = l.name;
   if (roadmap) listTitle.textContent = roadmap.title;
-  if (video) listTitle.textContent = video.title;
+  if (video) listTitle.textContent = '视频学习';
   if (id === 'roadmap') listTitle.textContent = '路线图';
   if (id === 'videos') listTitle.textContent = '视频学习';
   searchQuery = '';
@@ -664,6 +756,81 @@ function getBilibiliVideoTitle(url) {
   return '视频学习';
 }
 
+function fetchJsonp(url, callbackParam) {
+  return new Promise((resolve, reject) => {
+    const callbackName = '__biliJsonp_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    const script = document.createElement('script');
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+      clearTimeout(timer);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('metadata timeout'));
+    }, 12000);
+
+    window[callbackName] = (payload) => {
+      cleanup();
+      resolve(payload);
+    };
+
+    const finalUrl = new URL(url);
+    finalUrl.searchParams.set(callbackParam || 'callback', callbackName);
+    finalUrl.searchParams.set('jsonp', 'jsonp');
+    script.src = finalUrl.toString();
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('metadata script failed'));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+function parseBilibiliPayload(payload, bvid) {
+  if (!payload || payload.code !== 0 || !payload.data) {
+    throw new Error((payload && payload.message) || 'metadata unavailable');
+  }
+  return {
+    bvid: payload.data.bvid || bvid,
+    title: payload.data.title || getBilibiliVideoTitle(bvid),
+    cover: normalizeCoverUrl(payload.data.pic || ''),
+    duration: Number(payload.data.duration) || 0,
+  };
+}
+
+async function fetchBilibiliMetadata(input) {
+  const bvid = normalizeBvid(input);
+  if (!bvid) return null;
+  const endpoint = 'https://api.bilibili.com/x/web-interface/view?bvid=' + encodeURIComponent(bvid);
+
+  try {
+    const payload = await fetchJsonp(endpoint, 'callback');
+    return parseBilibiliPayload(payload, bvid);
+  } catch (jsonpError) {
+    const response = await fetch(endpoint, { mode: 'cors' });
+    if (!response.ok) throw jsonpError;
+    const payload = await response.json();
+    return parseBilibiliPayload(payload, bvid);
+  }
+}
+
+function createVideoPlaceholder(video) {
+  const title = encodeURIComponent((video && video.title) || 'Bilibili');
+  return `https://placehold.co/640x360/202020/60a5fa?text=${title}`;
+}
+
+function updateVideoProgress(video, value) {
+  const wasDone = video.done;
+  video.progressPercent = clampPercent(value);
+  video.done = video.progressPercent >= 100;
+  video.updatedAt = new Date().toISOString();
+  if (!wasDone && video.done) ding();
+  saveVideoProjects();
+  renderVideoGrid();
+  renderSidebar();
+}
+
 function renderVideo() {
   list.innerHTML = '';
   clearDoneBtn.style.display = 'none';
@@ -723,12 +890,129 @@ function renderVideo() {
   countEl.textContent = video.done ? '视频学习已完成 ✓' : '视频学习待完成';
 }
 
+function renderVideoGrid() {
+  list.innerHTML = '';
+  clearDoneBtn.style.display = 'none';
+  listTitle.textContent = '视频学习';
+  videoProjects = videoProjects.map(normalizeVideoProject);
+
+  if (!videoProjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="emoji">▶</div><div>还没有视频学习项目</div><div class="hint">点击左侧“视频学习”旁边的 +，粘贴 B 站链接</div>';
+    list.appendChild(empty);
+    countEl.textContent = '每个视频都会显示封面、时长和学习进度';
+    return;
+  }
+
+  const stats = getVideoStats();
+  const view = document.createElement('div');
+  view.className = 'video-view video-grid-view';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'video-toolbar';
+  toolbar.innerHTML = `<div class="video-summary">
+      <strong>视频学习收藏夹</strong>
+      <span>${stats.done}/${stats.total} 已完成 · ${stats.avg}%</span>
+    </div>
+    <div class="video-progress"><span style="width:${stats.avg}%"></span></div>`;
+  view.appendChild(toolbar);
+
+  const grid = document.createElement('div');
+  grid.className = 'video-grid';
+
+  videoProjects.forEach(video => {
+    const card = document.createElement('article');
+    card.className = 'video-tile' + (video.done ? ' done' : '');
+    if (activeListId === 'video:' + video.id) card.classList.add('active');
+
+    const coverLink = document.createElement('a');
+    coverLink.className = 'video-cover';
+    coverLink.href = video.url;
+    coverLink.target = '_blank';
+    coverLink.rel = 'noopener noreferrer';
+
+    const img = document.createElement('img');
+    img.src = video.cover || createVideoPlaceholder(video);
+    img.alt = video.title;
+    img.loading = 'lazy';
+    img.onerror = () => { img.src = createVideoPlaceholder(video); };
+    coverLink.appendChild(img);
+
+    const duration = document.createElement('span');
+    duration.className = 'video-duration';
+    duration.textContent = video.duration ? formatDuration(video.duration) : '--:--';
+    coverLink.appendChild(duration);
+
+    const body = document.createElement('div');
+    body.className = 'video-tile-body';
+
+    const titleLink = document.createElement('a');
+    titleLink.className = 'video-title';
+    titleLink.href = video.url;
+    titleLink.target = '_blank';
+    titleLink.rel = 'noopener noreferrer';
+    titleLink.textContent = video.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'video-meta';
+    meta.textContent = video.bvid || 'Bilibili';
+
+    const progressRow = document.createElement('div');
+    progressRow.className = 'video-tile-progress-row';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'video-tile-progress';
+    progressBar.innerHTML = `<span style="width:${getVideoProgress(video)}%"></span>`;
+    const percent = document.createElement('span');
+    percent.className = 'video-percent';
+    percent.textContent = getVideoProgress(video) + '%';
+    progressRow.appendChild(progressBar);
+    progressRow.appendChild(percent);
+
+    const controls = document.createElement('div');
+    controls.className = 'video-controls';
+
+    const check = document.createElement('button');
+    check.type = 'button';
+    check.className = 'video-check';
+    check.title = video.done ? '标记为未完成' : '标记为已完成';
+    check.setAttribute('aria-label', check.title);
+    check.addEventListener('click', () => updateVideoProgress(video, video.done ? 0 : 100));
+
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = '0';
+    range.max = '100';
+    range.step = '1';
+    range.value = String(getVideoProgress(video));
+    range.addEventListener('input', () => {
+      progressBar.querySelector('span').style.width = range.value + '%';
+      percent.textContent = clampPercent(range.value) + '%';
+    });
+    range.addEventListener('change', () => updateVideoProgress(video, range.value));
+
+    controls.appendChild(check);
+    controls.appendChild(range);
+    body.appendChild(titleLink);
+    body.appendChild(meta);
+    body.appendChild(progressRow);
+    body.appendChild(controls);
+    card.appendChild(coverLink);
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+  list.appendChild(view);
+  countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.avg}%`;
+}
+
 function render() {
   list.innerHTML = '';
   clearDoneBtn.style.display = '';
 
   if (isVideoView(activeListId)) {
-    renderVideo();
+    renderVideoGrid();
     return;
   }
 
@@ -1070,33 +1354,53 @@ importRoadmapBtn.addEventListener('click', () => {
   roadmapFileInput.click();
 });
 
-addVideoBtn.addEventListener('click', () => {
-  const url = prompt('粘贴 B 站视频链接');
-  if (!url) return;
-  const trimmedUrl = url.trim();
-  if (!trimmedUrl) return;
-  let parsedUrl;
-  try {
-    parsedUrl = new URL(trimmedUrl);
-  } catch (e) {
-    alert('请输入有效的视频链接。');
-    return;
+async function buildVideoFromBvid(inputValue) {
+  const bvid = normalizeBvid(inputValue);
+  if (!bvid) {
+    alert('请输入有效的 BV 号，例如 BV1GJ411x7h7。');
+    return null;
   }
-  const isBilibili = parsedUrl.hostname.includes('bilibili.com') || parsedUrl.hostname.includes('b23.tv');
-  if (!isBilibili && !confirm('这个链接看起来不是 B 站链接，也要添加吗？')) return;
 
-  const defaultTitle = getBilibiliVideoTitle(trimmedUrl);
-  const title = (prompt('给这个视频项目起个名字', defaultTitle) || defaultTitle).trim();
-  const video = {
+  let metadata = null;
+  try {
+    metadata = await fetchBilibiliMetadata(bvid);
+  } catch (e) {
+    alert('没有获取到这个 BV 号的视频信息。请检查 BV 号是否正确，或这个视频是否仍可访问。');
+    return null;
+  }
+
+  const defaultTitle = (metadata && metadata.title) || getBilibiliVideoTitle(bvid);
+  let title = defaultTitle;
+  let duration = metadata ? Number(metadata.duration) || 0 : 0;
+  let cover = metadata ? metadata.cover || '' : '';
+
+  return normalizeVideoProject({
     id: 'video_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     title: title || defaultTitle,
-    url: trimmedUrl,
+    url: getBilibiliVideoUrl((metadata && metadata.bvid) || bvid),
+    bvid: (metadata && metadata.bvid) || bvid,
+    cover,
+    duration,
+    progressPercent: 0,
     done: false,
     createdAt: new Date().toISOString(),
-  };
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+addVideoBtn.addEventListener('click', async () => {
+  const inputValue = prompt('输入 B 站视频 BV 号，例如 BV1GJ411x7h7');
+  if (!inputValue) return;
+  const video = await buildVideoFromBvid(inputValue.trim());
+  if (!video) return;
   videoProjects.push(video);
   saveVideoProjects();
   switchToList('video:' + video.id);
+});
+
+videoLabel.addEventListener('click', (e) => {
+  if (e.target === addVideoBtn) return;
+  switchToList('videos');
 });
 
 roadmapFileInput.addEventListener('change', () => {
@@ -1370,7 +1674,7 @@ function buildSnapshot() {
     version: SNAPSHOT_VERSION,
     todoLists: lists,
     roadmapProjects,
-    videoProjects,
+    videoProjects: videoProjects.map(normalizeVideoProject),
     settings: {
       theme: getTheme(),
       username: usernameEl.textContent || 'Lenovo',
@@ -1418,7 +1722,7 @@ function applySnapshot(snapshot) {
     const settings = snapshot.settings || {};
     lists = Array.isArray(snapshot.todoLists) ? snapshot.todoLists.filter(l => l.id !== 'roadmap') : loadLists();
     roadmapProjects = Array.isArray(snapshot.roadmapProjects) ? snapshot.roadmapProjects : [];
-    videoProjects = Array.isArray(snapshot.videoProjects) ? snapshot.videoProjects : [];
+    videoProjects = Array.isArray(snapshot.videoProjects) ? snapshot.videoProjects.map(normalizeVideoProject) : [];
 
     localStorage.setItem('todoLists', JSON.stringify(lists));
     localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
@@ -1448,7 +1752,7 @@ function applySnapshot(snapshot) {
 
     activeListId = settings.activeListId || 'tasks';
     if (isRoadmapView(activeListId) && !getActiveRoadmap()) activeListId = 'tasks';
-    if (isVideoView(activeListId) && !getActiveVideo()) activeListId = 'tasks';
+    if (activeListId !== 'videos' && isVideoView(activeListId) && !getActiveVideo()) activeListId = 'videos';
     if (!isRoadmapView(activeListId) && !isVideoView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
       activeListId = 'tasks';
     }
