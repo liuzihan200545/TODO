@@ -374,7 +374,8 @@ body {
   color: var(--text-secondary);
 }
 
-.roadmap-label {
+.roadmap-label,
+.video-label {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
@@ -386,7 +387,8 @@ body {
   justify-content: space-between;
 }
 
-.roadmap-label button {
+.roadmap-label button,
+.video-label button {
   background: none;
   border: none;
   color: var(--text-tertiary);
@@ -397,7 +399,8 @@ body {
   border-radius: 4px;
 }
 
-.roadmap-label button:hover {
+.roadmap-label button:hover,
+.video-label button:hover {
   color: var(--accent);
   background: var(--bg-nav-hover);
 }
@@ -406,11 +409,13 @@ body {
   display: none;
 }
 
-.roadmap-projects {
+.roadmap-projects,
+.video-projects {
   list-style: none;
 }
 
-.roadmap-projects li {
+.roadmap-projects li,
+.video-projects li {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -422,14 +427,17 @@ body {
   transition: background 0.1s;
 }
 
-.roadmap-projects li:hover { background: var(--bg-nav-hover); }
+.roadmap-projects li:hover,
+.video-projects li:hover { background: var(--bg-nav-hover); }
 
-.roadmap-projects li.active {
+.roadmap-projects li.active,
+.video-projects li.active {
   background: var(--bg-nav-active);
   font-weight: 600;
 }
 
-.roadmap-projects li .project-icon {
+.roadmap-projects li .project-icon,
+.video-projects li .video-icon {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
@@ -438,7 +446,8 @@ body {
   justify-content: center;
 }
 
-.roadmap-projects li .project-icon svg {
+.roadmap-projects li .project-icon svg,
+.video-projects li .video-icon svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -448,7 +457,8 @@ body {
   stroke-linejoin: round;
 }
 
-.roadmap-projects li .project-name {
+.roadmap-projects li .project-name,
+.video-projects li .video-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -456,13 +466,15 @@ body {
   white-space: nowrap;
 }
 
-.roadmap-projects li .count {
+.roadmap-projects li .count,
+.video-projects li .count {
   margin-left: auto;
   font-size: 12px;
   color: var(--text-secondary);
 }
 
-.roadmap-projects li .del-roadmap {
+.roadmap-projects li .del-roadmap,
+.video-projects li .del-video {
   background: none;
   border: none;
   color: transparent;
@@ -473,8 +485,10 @@ body {
   transition: color 0.1s;
 }
 
-.roadmap-projects li:hover .del-roadmap { color: var(--text-tertiary); }
-.roadmap-projects li .del-roadmap:hover { color: var(--danger); }
+.roadmap-projects li:hover .del-roadmap,
+.video-projects li:hover .del-video { color: var(--text-tertiary); }
+.roadmap-projects li .del-roadmap:hover,
+.video-projects li .del-video:hover { color: var(--danger); }
 
 .sidebar .custom-lists-label {
   font-size: 11px;
@@ -1302,4 +1316,86 @@ body {
 .roadmap-task.done .roadmap-task-text {
   color: var(--text-done);
   text-decoration: line-through;
+}
+
+.video-view {
+  padding: 22px 24px 24px;
+}
+
+.video-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.video-card .check {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border-check);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 2px;
+  transition: all 0.2s;
+}
+
+.video-card .check:hover {
+  border-color: var(--accent);
+  background: var(--bg-btn-hover);
+}
+
+.video-card.done .check {
+  background: var(--check-done-bg);
+  border-color: var(--check-done-border);
+}
+
+.video-card.done .check::after {
+  content: '';
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) translateY(-1px);
+}
+
+.video-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.video-title {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.video-card.done .video-title {
+  color: var(--text-done);
+  text-decoration: line-through;
+}
+
+.video-link {
+  color: var(--accent);
+  display: inline-block;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.video-link:hover {
+  text-decoration: underline;
+}
+
+.video-meta {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin-top: 10px;
 }

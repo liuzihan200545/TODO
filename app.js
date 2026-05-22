@@ -104,6 +104,8 @@ const createListBtn = document.getElementById('createListBtn');
 const importRoadmapBtn = document.getElementById('importRoadmapBtn');
 const roadmapFileInput = document.getElementById('roadmapFileInput');
 const roadmapProjectsEl = document.getElementById('roadmapProjects');
+const addVideoBtn = document.getElementById('addVideoBtn');
+const videoProjectsEl = document.getElementById('videoProjects');
 const syncForm = document.getElementById('syncForm');
 const syncUser = document.getElementById('syncUser');
 const syncEmail = document.getElementById('syncEmail');
@@ -181,7 +183,23 @@ function saveRoadmapProjects() {
 
 let roadmapProjects = loadRoadmapProjects();
 
+function loadVideoProjects() {
+  try {
+    const projects = JSON.parse(localStorage.getItem('videoProjects')) || [];
+    if (Array.isArray(projects)) return projects;
+  } catch (e) {}
+  return [];
+}
+
+function saveVideoProjects() {
+  localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
+  scheduleCloudSync();
+}
+
+let videoProjects = loadVideoProjects();
+
 function getActiveList() {
+  if (isVideoView(activeListId)) return null;
   if (isRoadmapView(activeListId)) return null;
   if (isSmartList(activeListId)) return null;
   return lists.find(l => l.id === activeListId) || lists[3];
@@ -232,13 +250,26 @@ function isRoadmapView(id) {
   return id === 'roadmap' || id.startsWith('roadmap:');
 }
 
+function isVideoView(id) {
+  return id === 'videos' || id.startsWith('video:');
+}
+
 function getRoadmapIdFromListId(id) {
   return id.startsWith('roadmap:') ? id.slice('roadmap:'.length) : null;
+}
+
+function getVideoIdFromListId(id) {
+  return id.startsWith('video:') ? id.slice('video:'.length) : null;
 }
 
 function getActiveRoadmap() {
   const roadmapId = getRoadmapIdFromListId(activeListId);
   return roadmapProjects.find(project => project.id === roadmapId) || null;
+}
+
+function getActiveVideo() {
+  const videoId = getVideoIdFromListId(activeListId);
+  return videoProjects.find(video => video.id === videoId) || null;
 }
 
 function getRoadmapOpenCount(project) {
@@ -265,6 +296,7 @@ function renderSidebar() {
   });
 
   renderRoadmapProjects();
+  renderVideoProjects();
 
   // render custom lists
   const custom = lists.filter(l => !defaultLists.find(d => d.id === l.id));
@@ -337,22 +369,62 @@ function renderRoadmapProjects() {
   });
 }
 
+function renderVideoProjects() {
+  videoProjectsEl.innerHTML = '';
+
+  videoProjects.forEach(video => {
+    const li = document.createElement('li');
+    const listId = 'video:' + video.id;
+    li.className = activeListId === listId ? 'active' : '';
+    li.dataset.listId = listId;
+    li.innerHTML = `<span class="video-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9l5 3-5 3z"/></svg></span>
+      <span class="video-name"></span>
+      <span class="count">${video.done ? '✓' : ''}</span>
+      <button class="del-video" data-id="${video.id}" title="删除视频">&times;</button>`;
+    li.querySelector('.video-name').textContent = video.title;
+    li.addEventListener('click', (e) => {
+      if (e.target.classList.contains('del-video')) return;
+      switchToList(listId);
+    });
+    videoProjectsEl.appendChild(li);
+  });
+
+  videoProjectsEl.querySelectorAll('.del-video').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm('确定删除这个视频学习项目？')) return;
+      videoProjects = videoProjects.filter(video => video.id !== id);
+      saveVideoProjects();
+      if (activeListId === 'video:' + id) {
+        const next = videoProjects[0] ? 'video:' + videoProjects[0].id : 'videos';
+        switchToList(next);
+      } else {
+        renderSidebar();
+      }
+    });
+  });
+}
+
 function switchToList(id) {
   activeListId = id;
   localStorage.setItem('activeListId', id);
   scheduleCloudSync();
   const def = defaultLists.find(d => d.id === id);
   const roadmap = getActiveRoadmap();
-  const l = def || roadmap || lists.find(x => x.id === id);
+  const video = getActiveVideo();
+  const l = def || roadmap || video || lists.find(x => x.id === id);
   if (l) listTitle.textContent = l.name;
   if (roadmap) listTitle.textContent = roadmap.title;
+  if (video) listTitle.textContent = video.title;
   if (id === 'roadmap') listTitle.textContent = '路线图';
+  if (id === 'videos') listTitle.textContent = '视频学习';
   searchQuery = '';
   const si = document.getElementById('searchInput');
   const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   ns.call(si, '');
   // hide input row for smart lists except myday
-  document.querySelector('.input-row').style.display = ((isSmartList(id) && id !== 'myday') || isRoadmapView(id)) ? 'none' : 'flex';
+  document.querySelector('.input-row').style.display = ((isSmartList(id) && id !== 'myday') || isRoadmapView(id) || isVideoView(id)) ? 'none' : 'flex';
   renderSidebar();
   render();
 }
@@ -580,9 +652,85 @@ function renderRoadmap() {
   countEl.textContent = tasks.length ? `${getRoadmapOpenCount(roadmap)} 项待完成` : '路线图说明';
 }
 
+function getBilibiliVideoTitle(url) {
+  const bvMatch = url.match(/\/(BV[a-zA-Z0-9]+)/i) || url.match(/\b(BV[a-zA-Z0-9]+)/i);
+  if (bvMatch) return 'B站视频 ' + bvMatch[1];
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes('bilibili.com') || parsed.hostname.includes('b23.tv')) {
+      return 'B站视频学习';
+    }
+  } catch (e) {}
+  return '视频学习';
+}
+
+function renderVideo() {
+  list.innerHTML = '';
+  clearDoneBtn.style.display = 'none';
+  const video = getActiveVideo();
+
+  if (!video) {
+    list.innerHTML = `<div class="empty-state">
+      <div class="emoji">▶</div>
+      <div>${videoProjects.length ? '请选择一个视频学习项目' : '还没有视频学习项目'}</div>
+      <div class="hint">点击左侧“视频学习”旁边的 + 粘贴 B 站链接</div>
+    </div>`;
+    countEl.textContent = '每个视频链接会成为一个独立学习项目';
+    return;
+  }
+
+  listTitle.textContent = video.title;
+
+  const view = document.createElement('div');
+  view.className = 'video-view';
+  const card = document.createElement('div');
+  card.className = 'video-card' + (video.done ? ' done' : '');
+
+  const check = document.createElement('span');
+  check.className = 'check';
+  check.title = video.done ? '标记为未完成' : '标记为已完成';
+  check.addEventListener('click', () => {
+    const wasDone = video.done;
+    video.done = !video.done;
+    if (!wasDone && video.done) ding();
+    saveVideoProjects();
+    renderVideo();
+    renderSidebar();
+  });
+
+  const main = document.createElement('div');
+  main.className = 'video-main';
+  const title = document.createElement('div');
+  title.className = 'video-title';
+  title.textContent = video.title;
+  const link = document.createElement('a');
+  link.className = 'video-link';
+  link.href = video.url;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = video.url;
+  const meta = document.createElement('div');
+  meta.className = 'video-meta';
+  meta.textContent = video.done ? '已完成学习' : '未完成学习';
+
+  main.appendChild(title);
+  main.appendChild(link);
+  main.appendChild(meta);
+  card.appendChild(check);
+  card.appendChild(main);
+  view.appendChild(card);
+  list.appendChild(view);
+  countEl.textContent = video.done ? '视频学习已完成 ✓' : '视频学习待完成';
+}
+
 function render() {
   list.innerHTML = '';
   clearDoneBtn.style.display = '';
+
+  if (isVideoView(activeListId)) {
+    renderVideo();
+    return;
+  }
 
   if (isRoadmapView(activeListId)) {
     renderRoadmap();
@@ -922,6 +1070,35 @@ importRoadmapBtn.addEventListener('click', () => {
   roadmapFileInput.click();
 });
 
+addVideoBtn.addEventListener('click', () => {
+  const url = prompt('粘贴 B 站视频链接');
+  if (!url) return;
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) return;
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(trimmedUrl);
+  } catch (e) {
+    alert('请输入有效的视频链接。');
+    return;
+  }
+  const isBilibili = parsedUrl.hostname.includes('bilibili.com') || parsedUrl.hostname.includes('b23.tv');
+  if (!isBilibili && !confirm('这个链接看起来不是 B 站链接，也要添加吗？')) return;
+
+  const defaultTitle = getBilibiliVideoTitle(trimmedUrl);
+  const title = (prompt('给这个视频项目起个名字', defaultTitle) || defaultTitle).trim();
+  const video = {
+    id: 'video_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    title: title || defaultTitle,
+    url: trimmedUrl,
+    done: false,
+    createdAt: new Date().toISOString(),
+  };
+  videoProjects.push(video);
+  saveVideoProjects();
+  switchToList('video:' + video.id);
+});
+
 roadmapFileInput.addEventListener('change', () => {
   const files = Array.from(roadmapFileInput.files || []);
   if (!files.length) return;
@@ -1193,6 +1370,7 @@ function buildSnapshot() {
     version: SNAPSHOT_VERSION,
     todoLists: lists,
     roadmapProjects,
+    videoProjects,
     settings: {
       theme: getTheme(),
       username: usernameEl.textContent || 'Lenovo',
@@ -1214,6 +1392,7 @@ function hasLocalUserData(snapshot) {
     return l.todos.length > 0 || !isDefault;
   });
   const hasRoadmaps = snapshot.roadmapProjects.length > 0;
+  const hasVideos = Array.isArray(snapshot.videoProjects) && snapshot.videoProjects.length > 0;
   const settings = snapshot.settings;
   const hasCustomSettings = settings.username !== 'Lenovo'
     || settings.theme !== (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -1222,7 +1401,7 @@ function hasLocalUserData(snapshot) {
     || settings.customBgs.length > 0
     || settings.cardOpacity !== '0.92'
     || settings.cardBlur !== '8';
-  return hasTodos || hasRoadmaps || hasCustomSettings;
+  return hasTodos || hasRoadmaps || hasVideos || hasCustomSettings;
 }
 
 function saveLocalSnapshot(snapshot) {
@@ -1239,9 +1418,11 @@ function applySnapshot(snapshot) {
     const settings = snapshot.settings || {};
     lists = Array.isArray(snapshot.todoLists) ? snapshot.todoLists.filter(l => l.id !== 'roadmap') : loadLists();
     roadmapProjects = Array.isArray(snapshot.roadmapProjects) ? snapshot.roadmapProjects : [];
+    videoProjects = Array.isArray(snapshot.videoProjects) ? snapshot.videoProjects : [];
 
     localStorage.setItem('todoLists', JSON.stringify(lists));
     localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
+    localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
 
     if (settings.theme) applyTheme(settings.theme);
     if (settings.username) {
@@ -1267,7 +1448,8 @@ function applySnapshot(snapshot) {
 
     activeListId = settings.activeListId || 'tasks';
     if (isRoadmapView(activeListId) && !getActiveRoadmap()) activeListId = 'tasks';
-    if (!isRoadmapView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
+    if (isVideoView(activeListId) && !getActiveVideo()) activeListId = 'tasks';
+    if (!isRoadmapView(activeListId) && !isVideoView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
       activeListId = 'tasks';
     }
     localStorage.setItem('activeListId', activeListId);
