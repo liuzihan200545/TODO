@@ -122,10 +122,21 @@ const syncUserEmail = document.getElementById('syncUserEmail');
 const manualSyncBtn = document.getElementById('manualSyncBtn');
 const syncLogoutBtn = document.getElementById('syncLogoutBtn');
 const syncStatus = document.getElementById('syncStatus');
+const aiSummaryBtn = document.getElementById('aiSummaryBtn');
+const aiSummaryModal = document.getElementById('aiSummaryModal');
+const aiSummaryBackdrop = document.getElementById('aiSummaryBackdrop');
+const aiSummaryClose = document.getElementById('aiSummaryClose');
+const aiSummaryDate = document.getElementById('aiSummaryDate');
+const deepseekKeyInput = document.getElementById('deepseekKeyInput');
+const aiGenerateBtn = document.getElementById('aiGenerateBtn');
+const aiSummaryStatus = document.getElementById('aiSummaryStatus');
+const aiSummaryResult = document.getElementById('aiSummaryResult');
+const aiSummaryHistory = document.getElementById('aiSummaryHistory');
 
 let searchQuery = '';
 let activeListId = 'tasks';
 let videoContextMenu = null;
+let aiSummaryType = 'daily';
 
 const defaultLists = [
   { id: 'myday', name: '我的一天', icon: 'sun' },
@@ -321,6 +332,55 @@ function saveCalendarProjects() {
 
 let calendarProjects = loadCalendarProjects();
 
+function loadAiSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem('aiSettings')) || {};
+    return {
+      deepseekApiKey: settings.deepseekApiKey || '',
+      model: settings.model || 'deepseek-chat',
+    };
+  } catch (e) {
+    return { deepseekApiKey: '', model: 'deepseek-chat' };
+  }
+}
+
+function normalizeAiSummary(summary) {
+  summary = summary || {};
+  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const fallbackDateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return {
+    id: summary.id || 'ai_summary_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    type: summary.type === 'weekly' ? 'weekly' : 'daily',
+    periodKey: summary.periodKey || fallbackDateKey,
+    title: summary.title || 'AI 总结',
+    inputStats: summary.inputStats || {},
+    content: summary.content || '',
+    createdAt: summary.createdAt || nowIso,
+    updatedAt: summary.updatedAt || summary.createdAt || nowIso,
+  };
+}
+
+function loadAiSummaries() {
+  try {
+    const summaries = JSON.parse(localStorage.getItem('aiSummaries')) || [];
+    return Array.isArray(summaries) ? summaries.map(normalizeAiSummary) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveAiData() {
+  aiSettings.model = aiSettings.model || 'deepseek-chat';
+  aiSummaries = aiSummaries.map(normalizeAiSummary);
+  localStorage.setItem('aiSettings', JSON.stringify(aiSettings));
+  localStorage.setItem('aiSummaries', JSON.stringify(aiSummaries));
+  scheduleCloudSync();
+}
+
+let aiSettings = loadAiSettings();
+let aiSummaries = loadAiSummaries();
+
 function clampPercent(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -362,6 +422,7 @@ function normalizeVideoProject(video) {
   video = video || {};
   const nowIso = new Date().toISOString();
   const progress = clampPercent(video.progressPercent !== undefined ? video.progressPercent : (video.done ? 100 : 0));
+  const done = video.done === true || progress >= 100;
   return {
     id: video.id || 'video_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     title: video.title || getBilibiliVideoTitle(video.url || ''),
@@ -370,7 +431,8 @@ function normalizeVideoProject(video) {
     cover: normalizeCoverUrl(video.cover || ''),
     duration: Number.isFinite(Number(video.duration)) ? Math.max(0, Math.round(Number(video.duration))) : 0,
     progressPercent: progress,
-    done: video.done === true || progress >= 100,
+    done,
+    completedAt: done && video.completedAt ? video.completedAt : null,
     createdAt: video.createdAt || nowIso,
     updatedAt: video.updatedAt || video.createdAt || nowIso,
   };
@@ -426,6 +488,361 @@ function getWeekDates(baseDate) {
     date.setDate(monday.getDate() + index);
     return date;
   });
+}
+
+function getWeekPeriodKey(dateKey) {
+  const dates = getWeekDates(parseDateKey(dateKey));
+  return toDateKey(dates[0]) + '_' + toDateKey(dates[6]);
+}
+
+function parseDateKey(key) {
+  const parts = String(key || '').split('-').map(Number);
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+  return new Date();
+}
+
+function formatAiPeriod(type, dateKey) {
+  if (type === 'weekly') {
+    const dates = getWeekDates(parseDateKey(dateKey));
+    return toDateKey(dates[0]) + ' 至 ' + toDateKey(dates[6]);
+  }
+  return dateKey;
+}
+
+function isIsoDateInRange(iso, startKey, endKey) {
+  if (!iso) return false;
+  const key = String(iso).slice(0, 10);
+  return key >= startKey && key <= endKey;
+}
+
+function getAiPeriodInfo(type, dateKey) {
+  const safeDateKey = dateKey || todayStr();
+  if (type === 'weekly') {
+    const dates = getWeekDates(parseDateKey(safeDateKey));
+    return {
+      type: 'weekly',
+      label: formatAiPeriod('weekly', safeDateKey),
+      periodKey: getWeekPeriodKey(safeDateKey),
+      startKey: toDateKey(dates[0]),
+      endKey: toDateKey(dates[6]),
+      dates: dates.map(toDateKey),
+    };
+  }
+  return {
+    type: 'daily',
+    label: safeDateKey,
+    periodKey: safeDateKey,
+    startKey: safeDateKey,
+    endKey: safeDateKey,
+    dates: [safeDateKey],
+  };
+}
+
+function getCompletedTodoEntries(period) {
+  const entries = [];
+  let unknown = 0;
+  lists.forEach(listItem => {
+    (listItem.todos || []).forEach(todo => {
+      if (!todo.done) return;
+      if (!todo.completedAt) {
+        unknown += 1;
+        return;
+      }
+      if (isIsoDateInRange(todo.completedAt, period.startKey, period.endKey)) {
+        entries.push({
+          text: todo.text,
+          list: listItem.name,
+          completedAt: todo.completedAt,
+        });
+      }
+    });
+  });
+  return { entries, unknown };
+}
+
+function getOpenTodoEntries(limit) {
+  const entries = [];
+  lists.forEach(listItem => {
+    (listItem.todos || []).forEach(todo => {
+      if (!todo.done) entries.push({ text: todo.text, list: listItem.name, dueDate: todo.dueDate || '' });
+    });
+  });
+  return entries.slice(0, limit || 20);
+}
+
+function getCompletedRoadmapEntries(period) {
+  const entries = [];
+  let unknown = 0;
+  let open = 0;
+  roadmapProjects.forEach(project => {
+    (project.items || []).forEach(item => {
+      if (item.type !== 'task') return;
+      if (!item.done) {
+        open += 1;
+        return;
+      }
+      if (!item.completedAt) {
+        unknown += 1;
+        return;
+      }
+      if (isIsoDateInRange(item.completedAt, period.startKey, period.endKey)) {
+        entries.push({ text: item.text, project: project.title, completedAt: item.completedAt });
+      }
+    });
+  });
+  return { entries, unknown, open };
+}
+
+function getVideoSummaryEntries(period) {
+  const completed = [];
+  let unknown = 0;
+  let inProgress = 0;
+  videoCollections.forEach(collection => {
+    (collection.videos || []).forEach(rawVideo => {
+      const video = normalizeVideoProject(rawVideo);
+      if (video.done) {
+        if (!video.completedAt) {
+          unknown += 1;
+        } else if (isIsoDateInRange(video.completedAt, period.startKey, period.endKey)) {
+          completed.push({ title: video.title, collection: collection.name, completedAt: video.completedAt });
+        }
+      } else if (video.progressPercent > 0) {
+        inProgress += 1;
+      }
+    });
+  });
+  return { completed, unknown, inProgress };
+}
+
+function getCalendarSummaryEntries(period) {
+  const entries = [];
+  const byDate = {};
+  period.dates.forEach(dateKey => { byDate[dateKey] = []; });
+  calendarProjects.forEach(project => {
+    period.dates.forEach(dateKey => {
+      if (project.days && project.days[dateKey]) {
+        const item = { project: project.name, date: dateKey };
+        entries.push(item);
+        byDate[dateKey].push(project.name);
+      }
+    });
+  });
+  return { entries, byDate };
+}
+
+function buildAiSummaryInput(type, dateKey) {
+  const period = getAiPeriodInfo(type, dateKey);
+  const todos = getCompletedTodoEntries(period);
+  const roadmaps = getCompletedRoadmapEntries(period);
+  const videos = getVideoSummaryEntries(period);
+  const calendars = getCalendarSummaryEntries(period);
+  const openTodos = getOpenTodoEntries(25);
+  const stats = {
+    completedTodos: todos.entries.length,
+    completedRoadmapTasks: roadmaps.entries.length,
+    completedVideos: videos.completed.length,
+    calendarCheckins: calendars.entries.length,
+    openTodos: openTodos.length,
+    unknownCompleted: todos.unknown + roadmaps.unknown + videos.unknown,
+  };
+  return {
+    type,
+    period,
+    stats,
+    completed: {
+      todos: todos.entries,
+      roadmapTasks: roadmaps.entries,
+      videos: videos.completed,
+      calendarCheckins: calendars.entries,
+    },
+    open: {
+      todos: openTodos,
+      roadmapTaskCount: roadmaps.open,
+      videoInProgressCount: videos.inProgress,
+    },
+    unknownCompleted: {
+      todos: todos.unknown,
+      roadmapTasks: roadmaps.unknown,
+      videos: videos.unknown,
+    },
+    calendarByDate: calendars.byDate,
+  };
+}
+
+function getCurrentAiPeriodKey() {
+  const dateKey = aiSummaryDate && aiSummaryDate.value ? aiSummaryDate.value : todayStr();
+  return getAiPeriodInfo(aiSummaryType, dateKey).periodKey;
+}
+
+function findAiSummary(type, periodKey) {
+  return aiSummaries.find(summary => summary.type === type && summary.periodKey === periodKey) || null;
+}
+
+function setAiStatus(message, state) {
+  if (!aiSummaryStatus) return;
+  aiSummaryStatus.textContent = message || '';
+  aiSummaryStatus.className = 'ai-status' + (state ? ' ' + state : '');
+}
+
+function renderAiSummaryContent(summary) {
+  if (!aiSummaryResult) return;
+  if (!summary) {
+    aiSummaryResult.textContent = '这个时间段还没有保存的总结。';
+    return;
+  }
+  aiSummaryResult.textContent = summary.content || '这个总结没有内容。';
+}
+
+function renderAiHistory() {
+  if (!aiSummaryHistory) return;
+  aiSummaryHistory.innerHTML = '';
+  const sorted = aiSummaries
+    .slice()
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, 12);
+  if (!sorted.length) {
+    aiSummaryHistory.innerHTML = '<div class="ai-history-empty">还没有生成过总结。</div>';
+    return;
+  }
+  sorted.forEach(summary => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ai-history-item';
+    btn.innerHTML = `<strong>${summary.title}</strong><span>${summary.type === 'weekly' ? '周总结' : '日总结'} · ${summary.periodKey}</span>`;
+    btn.addEventListener('click', () => {
+      aiSummaryType = summary.type;
+      if (aiSummaryDate) {
+        aiSummaryDate.value = summary.type === 'weekly' ? summary.periodKey.slice(0, 10) : summary.periodKey;
+      }
+      updateAiSummaryMode();
+      renderAiSummaryContent(summary);
+      setAiStatus('已打开历史总结', 'ok');
+    });
+    aiSummaryHistory.appendChild(btn);
+  });
+}
+
+function updateAiSummaryMode() {
+  document.querySelectorAll('[data-summary-type]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.summaryType === aiSummaryType);
+  });
+  const dateKey = aiSummaryDate && aiSummaryDate.value ? aiSummaryDate.value : todayStr();
+  const period = getAiPeriodInfo(aiSummaryType, dateKey);
+  const existing = findAiSummary(aiSummaryType, period.periodKey);
+  renderAiSummaryContent(existing);
+  if (existing) {
+    setAiStatus('已加载 ' + period.label + ' 的已保存总结', 'ok');
+  } else {
+    setAiStatus('当前范围：' + period.label, '');
+  }
+}
+
+function openAiSummaryModal() {
+  if (!aiSummaryModal) return;
+  aiSummaryModal.hidden = false;
+  if (aiSummaryDate && !aiSummaryDate.value) aiSummaryDate.value = todayStr();
+  if (deepseekKeyInput) deepseekKeyInput.value = aiSettings.deepseekApiKey || '';
+  updateAiSummaryMode();
+  renderAiHistory();
+}
+
+function closeAiSummaryModal() {
+  if (aiSummaryModal) aiSummaryModal.hidden = true;
+}
+
+function buildDeepSeekPrompt(inputData) {
+  return [
+    '请基于下面这份任务数据，生成一份中文' + (inputData.type === 'weekly' ? '每周' : '每日') + '总结和评价。',
+    '要求：简洁、具体、有判断；必须包含“完成概况 / 亮点 / 问题 / 下一步建议”四段；不要空泛鸡汤，要引用真实任务名称。',
+    '如果完成时间未知，只说明旧完成项无法归入本周期，不要把它们算作本周期成果。',
+    '',
+    JSON.stringify(inputData, null, 2),
+  ].join('\n');
+}
+
+function getDeepSeekErrorMessage(error, response) {
+  if (response && response.status === 401) return 'DeepSeek API Key 无效或没有权限。';
+  if (response && response.status === 402) return 'DeepSeek 账户余额不足或计费状态异常。';
+  if (response && response.status === 429) return 'DeepSeek 调用过于频繁，请稍后再试。';
+  if (response && response.status >= 500) return 'DeepSeek 服务暂时不可用，请稍后重试。';
+  if (error && error.name === 'TypeError') return '网络请求失败，可能是浏览器跨域限制、网络中断或接口不可达。';
+  return (error && error.message) || '生成失败，请稍后重试。';
+}
+
+async function requestDeepSeekSummary(inputData) {
+  const apiKey = (aiSettings.deepseekApiKey || '').trim();
+  if (!apiKey) throw new Error('请先填写 DeepSeek API Key。');
+  let response;
+  try {
+    response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiKey,
+      },
+      body: JSON.stringify({
+        model: aiSettings.model || 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是一个严谨、具体、不过度夸张的个人效率复盘助手。' },
+          { role: 'user', content: buildDeepSeekPrompt(inputData) },
+        ],
+        temperature: 0.5,
+        max_tokens: 1200,
+      }),
+    });
+  } catch (error) {
+    throw new Error(getDeepSeekErrorMessage(error));
+  }
+
+  let data = null;
+  try { data = await response.json(); } catch (e) {}
+  if (!response.ok) {
+    const message = data && data.error && data.error.message ? data.error.message : getDeepSeekErrorMessage(null, response);
+    throw new Error(message);
+  }
+  const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  if (!content) throw new Error('DeepSeek 没有返回可用内容。');
+  return content.trim();
+}
+
+async function generateAiSummary() {
+  if (!aiGenerateBtn) return;
+  const key = deepseekKeyInput ? deepseekKeyInput.value.trim() : '';
+  aiSettings.deepseekApiKey = key;
+  aiSettings.model = aiSettings.model || 'deepseek-chat';
+  saveAiData();
+
+  const dateKey = aiSummaryDate && aiSummaryDate.value ? aiSummaryDate.value : todayStr();
+  const inputData = buildAiSummaryInput(aiSummaryType, dateKey);
+  aiGenerateBtn.disabled = true;
+  setAiStatus('正在生成总结...', '');
+  try {
+    const content = await requestDeepSeekSummary(inputData);
+    const nowIso = new Date().toISOString();
+    const existing = findAiSummary(aiSummaryType, inputData.period.periodKey);
+    const nextSummary = normalizeAiSummary({
+      id: existing ? existing.id : undefined,
+      type: aiSummaryType,
+      periodKey: inputData.period.periodKey,
+      title: (aiSummaryType === 'weekly' ? '周总结 · ' : '日总结 · ') + inputData.period.label,
+      inputStats: inputData.stats,
+      content,
+      createdAt: existing ? existing.createdAt : nowIso,
+      updatedAt: nowIso,
+    });
+    aiSummaries = aiSummaries.filter(summary => !(summary.type === nextSummary.type && summary.periodKey === nextSummary.periodKey));
+    aiSummaries.unshift(nextSummary);
+    saveAiData();
+    renderAiSummaryContent(nextSummary);
+    renderAiHistory();
+    setAiStatus('已生成并保存', 'ok');
+  } catch (error) {
+    setAiStatus(error.message || '生成失败', 'error');
+  } finally {
+    aiGenerateBtn.disabled = false;
+  }
 }
 
 function getCalendarWeekDoneCount(project) {
@@ -1189,10 +1606,12 @@ function parseRoadmapMarkdown(markdown, fileName) {
 
     const task = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
     if (task) {
+      const done = task[1].toLowerCase() === 'x';
       items.push({
         id: 'roadmap_' + Date.now() + '_' + items.length,
         type: 'task',
-        done: task[1].toLowerCase() === 'x',
+        done,
+        completedAt: done ? new Date().toISOString() : null,
         text: task[2].trim(),
       });
       return;
@@ -1289,6 +1708,7 @@ function renderRoadmap() {
       check.addEventListener('click', () => {
         const wasDone = item.done;
         item.done = !item.done;
+        item.completedAt = item.done ? (item.completedAt || new Date().toISOString()) : null;
         if (!wasDone && item.done) ding();
         saveRoadmapProjects();
         renderRoadmap();
@@ -1391,6 +1811,7 @@ function updateVideoProgress(video, value) {
   const wasDone = video.done;
   video.progressPercent = clampPercent(value);
   video.done = video.progressPercent >= 100;
+  video.completedAt = video.done ? (video.completedAt || new Date().toISOString()) : null;
   video.updatedAt = new Date().toISOString();
   if (!wasDone && video.done) ding();
   saveVideoCollections();
@@ -2047,8 +2468,10 @@ function render() {
     const check = document.createElement('span');
     check.className = 'check';
     check.addEventListener('click', () => {
+      const wasDone = t.done;
       t.done = !t.done;
-      if (t.done) ding();
+      t.completedAt = t.done ? (t.completedAt || new Date().toISOString()) : null;
+      if (!wasDone && t.done) ding();
       saveAndRender();
     });
 
@@ -2159,7 +2582,7 @@ function saveAndRender() {
 function add() {
   const text = input.value.trim();
   if (!text) return;
-  const task = { text, done: false, important: false, myDay: null };
+  const task = { text, done: false, important: false, myDay: null, completedAt: null };
   if (activeListId === 'myday') {
     task.myDay = todayStr();
     const tasksList = lists.find(l => l.id === 'tasks');
@@ -2179,6 +2602,68 @@ lists.forEach(l => {
     if (t.dueDate === undefined) t.dueDate = null;
   });
 });
+
+function backfillCompletedTimestamps(persist) {
+  const nowIso = new Date().toISOString();
+  let changed = false;
+
+  lists.forEach(l => {
+    (l.todos || []).forEach(t => {
+      if (t.done && !t.completedAt) {
+        t.completedAt = nowIso;
+        changed = true;
+      }
+      if (!t.done && t.completedAt) {
+        t.completedAt = null;
+        changed = true;
+      }
+    });
+  });
+
+  roadmapProjects.forEach(project => {
+    (project.items || []).forEach(item => {
+      if (item.type !== 'task') return;
+      if (item.done && !item.completedAt) {
+        item.completedAt = nowIso;
+        changed = true;
+      }
+      if (!item.done && item.completedAt) {
+        item.completedAt = null;
+        changed = true;
+      }
+    });
+  });
+
+  videoCollections = videoCollections.map(collection => {
+    const normalized = normalizeVideoCollection(collection);
+    normalized.videos = normalized.videos.map(video => {
+      if (video.done && !video.completedAt) {
+        video.completedAt = nowIso;
+        changed = true;
+      }
+      if (!video.done && video.completedAt) {
+        video.completedAt = null;
+        changed = true;
+      }
+      return video;
+    });
+    return normalized;
+  });
+  videoProjects = videoCollections.flatMap(collection => collection.videos);
+
+  if (changed && persist !== false) {
+    localStorage.setItem('todoLists', JSON.stringify(lists));
+    localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
+    localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
+    localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
+    try { saveLocalSnapshot(buildSnapshot()); } catch (e) {}
+    scheduleCloudSync();
+  }
+
+  return changed;
+}
+
+backfillCompletedTimestamps(true);
 
 // ── Smart list helpers ──
 const todayStr = () => {
@@ -2260,6 +2745,28 @@ clearDoneBtn.addEventListener('click', () => {
     if (al) al.todos = al.todos.filter(t => !t.done);
   }
   saveAndRender();
+});
+
+if (aiSummaryBtn) aiSummaryBtn.addEventListener('click', openAiSummaryModal);
+if (aiSummaryBackdrop) aiSummaryBackdrop.addEventListener('click', closeAiSummaryModal);
+if (aiSummaryClose) aiSummaryClose.addEventListener('click', closeAiSummaryModal);
+if (aiSummaryDate) aiSummaryDate.addEventListener('change', updateAiSummaryMode);
+if (deepseekKeyInput) {
+  deepseekKeyInput.addEventListener('change', () => {
+    aiSettings.deepseekApiKey = deepseekKeyInput.value.trim();
+    saveAiData();
+    setAiStatus('DeepSeek API Key 已保存', 'ok');
+  });
+}
+if (aiGenerateBtn) aiGenerateBtn.addEventListener('click', generateAiSummary);
+document.querySelectorAll('[data-summary-type]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    aiSummaryType = btn.dataset.summaryType === 'weekly' ? 'weekly' : 'daily';
+    updateAiSummaryMode();
+  });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && aiSummaryModal && !aiSummaryModal.hidden) closeAiSummaryModal();
 });
 
 // sidebar default nav click
@@ -2652,6 +3159,7 @@ function buildSnapshot() {
     videoProjects: videoProjects.map(normalizeVideoProject),
     videoCollections: videoCollections.map(normalizeVideoCollection),
     calendarProjects: calendarProjects.map(normalizeCalendarProject),
+    aiSummaries: aiSummaries.map(normalizeAiSummary),
     settings: {
       theme: getTheme(),
       username: usernameEl.textContent || 'Lenovo',
@@ -2663,6 +3171,7 @@ function buildSnapshot() {
       cardOpacity: getSettingValue('cardOpacity', '0.92'),
       cardBlur: getSettingValue('cardBlur', '8'),
       sidebarLabels,
+      aiSettings,
     },
     updatedAt: new Date().toISOString(),
   };
@@ -2677,6 +3186,7 @@ function hasLocalUserData(snapshot) {
   const hasVideos = Array.isArray(snapshot.videoProjects) && snapshot.videoProjects.length > 0;
   const hasVideoCollections = Array.isArray(snapshot.videoCollections) && snapshot.videoCollections.length > 0;
   const hasCalendars = Array.isArray(snapshot.calendarProjects) && snapshot.calendarProjects.length > 0;
+  const hasAiSummaries = Array.isArray(snapshot.aiSummaries) && snapshot.aiSummaries.length > 0;
   const settings = snapshot.settings;
   const hasCustomSettings = settings.username !== 'Lenovo'
     || settings.theme !== (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -2685,8 +3195,9 @@ function hasLocalUserData(snapshot) {
     || settings.customBgs.length > 0
     || settings.cardOpacity !== '0.92'
     || settings.cardBlur !== '8'
-    || JSON.stringify(settings.sidebarLabels || DEFAULT_SIDEBAR_LABELS) !== JSON.stringify(DEFAULT_SIDEBAR_LABELS);
-  return hasTodos || hasRoadmaps || hasVideos || hasVideoCollections || hasCalendars || hasCustomSettings;
+    || JSON.stringify(settings.sidebarLabels || DEFAULT_SIDEBAR_LABELS) !== JSON.stringify(DEFAULT_SIDEBAR_LABELS)
+    || !!(settings.aiSettings && settings.aiSettings.deepseekApiKey);
+  return hasTodos || hasRoadmaps || hasVideos || hasVideoCollections || hasCalendars || hasAiSummaries || hasCustomSettings;
 }
 
 function saveLocalSnapshot(snapshot) {
@@ -2698,6 +3209,7 @@ function applySnapshot(snapshot) {
     throw new Error('不支持的云端数据版本');
   }
 
+  let completedAtBackfilled = false;
   suppressSync = true;
   try {
     const settings = snapshot.settings || {};
@@ -2709,12 +3221,21 @@ function applySnapshot(snapshot) {
       : (videoProjects.length ? [normalizeVideoCollection({ id: 'video_collection_default', name: '默认收藏夹', videos: videoProjects })] : []);
     videoProjects = videoCollections.flatMap(collection => collection.videos);
     calendarProjects = Array.isArray(snapshot.calendarProjects) ? snapshot.calendarProjects.map(normalizeCalendarProject) : [];
+    aiSummaries = Array.isArray(snapshot.aiSummaries) ? snapshot.aiSummaries.map(normalizeAiSummary) : [];
+    aiSettings = {
+      ...loadAiSettings(),
+      ...(settings.aiSettings || {}),
+      model: (settings.aiSettings && settings.aiSettings.model) || 'deepseek-chat',
+    };
+    completedAtBackfilled = backfillCompletedTimestamps(false);
 
     localStorage.setItem('todoLists', JSON.stringify(lists));
     localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
     localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
     localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
     localStorage.setItem('calendarProjects', JSON.stringify(calendarProjects));
+    localStorage.setItem('aiSummaries', JSON.stringify(aiSummaries));
+    localStorage.setItem('aiSettings', JSON.stringify(aiSettings));
 
     if (settings.theme) applyTheme(settings.theme);
     if (settings.username) {
@@ -2756,11 +3277,12 @@ function applySnapshot(snapshot) {
     localStorage.setItem('activeListId', activeListId);
 
     applyBackground();
-    saveLocalSnapshot(snapshot);
+    saveLocalSnapshot(completedAtBackfilled ? buildSnapshot() : snapshot);
     switchToList(activeListId);
   } finally {
     suppressSync = false;
   }
+  if (completedAtBackfilled) scheduleCloudSync();
 }
 
 async function loadCloudSnapshot() {

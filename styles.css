@@ -717,6 +717,224 @@ body {
   background: rgba(255,255,255,0.35);
 }
 
+.hero .ai-summary-btn {
+  position: absolute;
+  top: 12px;
+  right: 64px;
+  height: 32px;
+  min-width: 42px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  color: var(--hero-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.hero .ai-summary-btn:hover {
+  background: rgba(255,255,255,0.36);
+}
+
+.ai-modal[hidden] {
+  display: none;
+}
+
+.ai-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+}
+
+.ai-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.46);
+}
+
+.ai-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(860px, calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  transform: translate(-50%, -50%);
+  overflow: auto;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  background: rgba(var(--card-rgb), 0.96);
+  backdrop-filter: blur(var(--card-blur));
+  box-shadow: 0 24px 70px rgba(0,0,0,0.35);
+  color: var(--text-primary);
+}
+
+.ai-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border-divider);
+}
+
+.ai-panel-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.ai-panel-head p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ai-close-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-btn-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.ai-controls {
+  display: grid;
+  grid-template-columns: auto 150px minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-divider);
+}
+
+.ai-segment {
+  display: flex;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ai-segment button,
+.ai-generate-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  padding: 9px 12px;
+}
+
+.ai-segment button.active,
+.ai-generate-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.ai-generate-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ai-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ai-controls input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  padding: 0 10px;
+}
+
+.ai-status {
+  min-height: 20px;
+  padding: 10px 20px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ai-status.ok {
+  color: var(--accent);
+}
+
+.ai-status.error {
+  color: var(--danger);
+}
+
+.ai-result {
+  margin: 12px 20px 18px;
+  min-height: 180px;
+  padding: 16px;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: rgba(0,0,0,0.14);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.ai-history-head {
+  padding: 0 20px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-history {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+  padding: 0 20px 20px;
+}
+
+.ai-history-item {
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--bg-btn-hover);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  padding: 10px;
+  text-align: left;
+}
+
+.ai-history-item strong,
+.ai-history-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-history-item span,
+.ai-history-empty {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+@media (max-width: 760px) {
+  .ai-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .hero .ai-summary-btn {
+    right: 58px;
+  }
+}
+
 /* ── Background Picker ── */
 .overlay {
   position: fixed;

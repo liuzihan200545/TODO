@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Microsoft To Do</title>
-  <link rel="stylesheet" href="styles.css?v=20260523-video-collections">
+  <link rel="stylesheet" href="styles.css?v=20260523-ai-summary">
 </head>
 <body>
   <div class="app">
@@ -96,6 +96,7 @@
       <div class="hero" id="hero">
         <h1 id="listTitle">任务</h1>
         <div class="subtitle" id="dateLabel"></div>
+        <button class="ai-summary-btn" id="aiSummaryBtn" title="AI 总结">AI</button>
         <button class="bg-btn" id="bgBtn" title="更换背景">🖼</button>
       </div>
 
@@ -118,7 +119,42 @@
     </main>
   </div>
 
+  <div class="ai-modal" id="aiSummaryModal" hidden>
+    <div class="ai-modal-backdrop" id="aiSummaryBackdrop"></div>
+    <section class="ai-panel" role="dialog" aria-modal="true" aria-labelledby="aiSummaryTitle">
+      <div class="ai-panel-head">
+        <div>
+          <h2 id="aiSummaryTitle">AI 总结</h2>
+          <p>用 DeepSeek 评价每天或每周的完成情况</p>
+        </div>
+        <button class="ai-close-btn" id="aiSummaryClose" title="关闭">×</button>
+      </div>
+
+      <div class="ai-controls">
+        <div class="ai-segment" role="tablist">
+          <button type="button" class="active" data-summary-type="daily">每日总结</button>
+          <button type="button" data-summary-type="weekly">每周总结</button>
+        </div>
+        <label>
+          <span>日期</span>
+          <input type="date" id="aiSummaryDate">
+        </label>
+        <label class="ai-key-field">
+          <span>DeepSeek API Key</span>
+          <input type="password" id="deepseekKeyInput" placeholder="sk-...">
+        </label>
+        <button class="ai-generate-btn" id="aiGenerateBtn">生成总结</button>
+      </div>
+
+      <div class="ai-status" id="aiSummaryStatus"></div>
+      <article class="ai-result" id="aiSummaryResult">选择日期后点击“生成总结”。</article>
+
+      <div class="ai-history-head">历史总结</div>
+      <div class="ai-history" id="aiSummaryHistory"></div>
+    </section>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=20260523-video-collections"></script>
+  <script src="app.js?v=20260523-ai-summary"></script>
 </body>
 </html>
