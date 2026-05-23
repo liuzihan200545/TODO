@@ -104,9 +104,14 @@ const createListBtn = document.getElementById('createListBtn');
 const importRoadmapBtn = document.getElementById('importRoadmapBtn');
 const roadmapFileInput = document.getElementById('roadmapFileInput');
 const roadmapProjectsEl = document.getElementById('roadmapProjects');
+const roadmapLabel = document.querySelector('.roadmap-label');
 const addVideoBtn = document.getElementById('addVideoBtn');
 const videoProjectsEl = document.getElementById('videoProjects');
 const videoLabel = document.querySelector('.video-label');
+const addCalendarBtn = document.getElementById('addCalendarBtn');
+const calendarProjectsEl = document.getElementById('calendarProjects');
+const calendarLabel = document.querySelector('.calendar-label');
+const customListsLabel = document.querySelector('.custom-lists-label');
 const syncForm = document.getElementById('syncForm');
 const syncUser = document.getElementById('syncUser');
 const syncEmail = document.getElementById('syncEmail');
@@ -127,6 +132,52 @@ const defaultLists = [
   { id: 'planned', name: '计划内', icon: 'calendar' },
   { id: 'tasks', name: '任务', icon: 'list' },
 ];
+
+const DEFAULT_SIDEBAR_LABELS = {
+  'group.roadmap': '路线图',
+  'group.video': '视频学习',
+  'group.calendar': '日历栏',
+  'group.custom': '我的列表',
+};
+
+function loadSidebarLabels() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('sidebarLabels')) || {};
+    delete saved['nav.myday'];
+    delete saved['nav.important'];
+    delete saved['nav.planned'];
+    delete saved['nav.tasks'];
+    return { ...DEFAULT_SIDEBAR_LABELS, ...saved };
+  } catch (e) {
+    return { ...DEFAULT_SIDEBAR_LABELS };
+  }
+}
+
+let sidebarLabels = loadSidebarLabels();
+let activeRenameContext = null;
+
+function getSidebarLabel(key) {
+  return sidebarLabels[key] || DEFAULT_SIDEBAR_LABELS[key] || '';
+}
+
+function saveSidebarLabels() {
+  delete sidebarLabels['nav.myday'];
+  delete sidebarLabels['nav.important'];
+  delete sidebarLabels['nav.planned'];
+  delete sidebarLabels['nav.tasks'];
+  localStorage.setItem('sidebarLabels', JSON.stringify(sidebarLabels));
+  scheduleCloudSync();
+}
+
+function renameSidebarLabel(key, nextName) {
+  if (key.startsWith('nav.')) return;
+  const name = String(nextName || '').trim();
+  if (!name) return;
+  sidebarLabels[key] = name;
+  saveSidebarLabels();
+  renderSidebar();
+  switchToList(activeListId);
+}
 
 function loadLists() {
   let data = localStorage.getItem('todoLists');
@@ -199,6 +250,75 @@ function saveVideoProjects() {
 }
 
 let videoProjects = loadVideoProjects();
+
+function normalizeVideoCollection(collection) {
+  collection = collection || {};
+  const videos = Array.isArray(collection.videos) ? collection.videos.map(normalizeVideoProject) : [];
+  return {
+    id: collection.id || 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    name: collection.name || collection.title || '默认收藏夹',
+    videos,
+    createdAt: collection.createdAt || new Date().toISOString(),
+  };
+}
+
+function loadVideoCollections() {
+  try {
+    const collections = JSON.parse(localStorage.getItem('videoCollections')) || [];
+    if (Array.isArray(collections) && collections.length) return collections.map(normalizeVideoCollection);
+  } catch (e) {}
+
+  const legacyVideos = videoProjects.map(normalizeVideoProject);
+  if (legacyVideos.length) {
+    return [normalizeVideoCollection({
+      id: 'video_collection_default',
+      name: '默认收藏夹',
+      videos: legacyVideos,
+      createdAt: new Date().toISOString(),
+    })];
+  }
+  return [];
+}
+
+function saveVideoCollections() {
+  videoCollections = videoCollections.map(normalizeVideoCollection);
+  localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
+  videoProjects = videoCollections.flatMap(collection => collection.videos);
+  localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
+  scheduleCloudSync();
+}
+
+let videoCollections = loadVideoCollections();
+if (videoCollections.length && !localStorage.getItem('videoCollections')) {
+  localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
+}
+
+function normalizeCalendarProject(project) {
+  project = project || {};
+  const days = project.days && typeof project.days === 'object' ? project.days : {};
+  return {
+    id: project.id || 'calendar_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    name: project.name || project.title || '打卡项目',
+    days,
+    createdAt: project.createdAt || new Date().toISOString(),
+  };
+}
+
+function loadCalendarProjects() {
+  try {
+    const projects = JSON.parse(localStorage.getItem('calendarProjects')) || [];
+    if (Array.isArray(projects)) return projects.map(normalizeCalendarProject);
+  } catch (e) {}
+  return [];
+}
+
+function saveCalendarProjects() {
+  calendarProjects = calendarProjects.map(normalizeCalendarProject);
+  localStorage.setItem('calendarProjects', JSON.stringify(calendarProjects));
+  scheduleCloudSync();
+}
+
+let calendarProjects = loadCalendarProjects();
 
 function clampPercent(value) {
   const n = Number(value);
@@ -280,15 +400,80 @@ function getVideoProgress(video) {
 }
 
 function getVideoStats() {
-  const total = videoProjects.length;
-  const done = videoProjects.filter(video => normalizeVideoProject(video).done).length;
+  const videos = getActiveVideoCollection() ? getActiveVideoCollection().videos : videoCollections.flatMap(collection => collection.videos);
+  const total = videos.length;
+  const done = videos.filter(video => normalizeVideoProject(video).done).length;
   const avg = total
-    ? Math.round(videoProjects.reduce((sum, video) => sum + getVideoProgress(video), 0) / total)
+    ? Math.round(videos.reduce((sum, video) => sum + getVideoProgress(video), 0) / total)
     : 0;
   return { total, done, avg };
 }
 
+function toDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getWeekDates(baseDate) {
+  const base = new Date(baseDate || new Date());
+  base.setHours(0, 0, 0, 0);
+  const day = base.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + mondayOffset);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return date;
+  });
+}
+
+function getCalendarWeekDoneCount(project) {
+  const days = project.days || {};
+  return getWeekDates().filter(date => days[toDateKey(date)]).length;
+}
+
+function getCalendarStats() {
+  const weekDates = getWeekDates();
+  const total = calendarProjects.length * weekDates.length;
+  const done = calendarProjects.reduce((sum, project) => {
+    return sum + weekDates.filter(date => project.days && project.days[toDateKey(date)]).length;
+  }, 0);
+  const percent = total ? Math.round(done / total * 100) : 0;
+  return { total, done, percent };
+}
+
+function getMonthDates(baseDate) {
+  const base = new Date(baseDate || new Date());
+  const year = base.getFullYear();
+  const month = base.getMonth();
+  const first = new Date(year, month, 1);
+  const start = new Date(first);
+  const firstDay = first.getDay();
+  start.setDate(first.getDate() - (firstDay === 0 ? 6 : firstDay - 1));
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}
+
+function getCalendarMonthStats(project, baseDate) {
+  const base = new Date(baseDate || new Date());
+  const monthDates = getMonthDates(base).filter(date => date.getMonth() === base.getMonth());
+  if (project) {
+    const done = monthDates.filter(date => project.days && project.days[toDateKey(date)]).length;
+    const percent = monthDates.length ? Math.round(done / monthDates.length * 100) : 0;
+    return { total: monthDates.length, done, percent };
+  }
+  const total = calendarProjects.length * monthDates.length;
+  const done = calendarProjects.reduce((sum, item) => {
+    return sum + monthDates.filter(date => item.days && item.days[toDateKey(date)]).length;
+  }, 0);
+  return { total, done, percent: total ? Math.round(done / total * 100) : 0 };
+}
+
 function getActiveList() {
+  if (isCalendarView(activeListId)) return null;
   if (isVideoView(activeListId)) return null;
   if (isRoadmapView(activeListId)) return null;
   if (isSmartList(activeListId)) return null;
@@ -341,7 +526,11 @@ function isRoadmapView(id) {
 }
 
 function isVideoView(id) {
-  return id === 'videos' || id.startsWith('video:');
+  return id === 'videos' || id.startsWith('video:') || id.startsWith('video-collection:');
+}
+
+function isCalendarView(id) {
+  return id === 'calendar' || id.startsWith('calendar:');
 }
 
 function getRoadmapIdFromListId(id) {
@@ -352,6 +541,14 @@ function getVideoIdFromListId(id) {
   return id.startsWith('video:') ? id.slice('video:'.length) : null;
 }
 
+function getVideoCollectionIdFromListId(id) {
+  return id.startsWith('video-collection:') ? id.slice('video-collection:'.length) : null;
+}
+
+function getCalendarIdFromListId(id) {
+  return id.startsWith('calendar:') ? id.slice('calendar:'.length) : null;
+}
+
 function getActiveRoadmap() {
   const roadmapId = getRoadmapIdFromListId(activeListId);
   return roadmapProjects.find(project => project.id === roadmapId) || null;
@@ -359,7 +556,17 @@ function getActiveRoadmap() {
 
 function getActiveVideo() {
   const videoId = getVideoIdFromListId(activeListId);
-  return videoProjects.find(video => video.id === videoId) || null;
+  return videoCollections.flatMap(collection => collection.videos).find(video => video.id === videoId) || null;
+}
+
+function getActiveVideoCollection() {
+  const collectionId = getVideoCollectionIdFromListId(activeListId);
+  return videoCollections.find(collection => collection.id === collectionId) || null;
+}
+
+function getActiveCalendarProject() {
+  const calendarId = getCalendarIdFromListId(activeListId);
+  return calendarProjects.find(project => project.id === calendarId) || null;
 }
 
 function getRoadmapOpenCount(project) {
@@ -367,7 +574,244 @@ function getRoadmapOpenCount(project) {
   return project.items.filter(item => item.type === 'task' && !item.done).length;
 }
 
+function setupEditableText(el, value, onSave, renameType, renameKey) {
+  if (!el) return;
+  el.textContent = value;
+  el.title = '双击重命名';
+  el.dataset.renameReady = 'true';
+  if (renameType) el.dataset.renameType = renameType;
+  if (renameKey) el.dataset.renameKey = renameKey;
+  const renameId = 'rename_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+  el.dataset.renameId = renameId;
+  el._renameSave = onSave;
+  if (!window.sidebarRenameHandlers) window.sidebarRenameHandlers = {};
+  window.sidebarRenameHandlers[renameId] = onSave;
+}
+
+function saveSidebarRenameTarget(el, nextName) {
+  const name = String(nextName || '').trim();
+  if (!name) return false;
+  const type = el.dataset.renameType;
+  const key = el.dataset.renameKey;
+
+  if (type === 'group') {
+    sidebarLabels[key] = name;
+    saveSidebarLabels();
+  } else if (type === 'roadmap') {
+    const project = roadmapProjects.find(item => item.id === key);
+    if (!project) return false;
+    project.title = name;
+    saveRoadmapProjects();
+  } else if (type === 'videoCollection') {
+    const collection = videoCollections.find(item => item.id === key);
+    if (!collection) return false;
+    collection.name = name;
+    saveVideoCollections();
+  } else if (type === 'calendar') {
+    const project = calendarProjects.find(item => item.id === key);
+    if (!project) return false;
+    project.name = name;
+    saveCalendarProjects();
+  } else if (type === 'customList') {
+    const custom = lists.find(item => item.id === key);
+    if (!custom) return false;
+    custom.name = name;
+    saveLists(lists);
+  } else if (type === 'legacyVideo') {
+    const video = videoProjects.find(item => item.id === key);
+    if (!video) return false;
+    video.title = name;
+    saveVideoProjects();
+  } else if (typeof el._renameSave === 'function') {
+    el._renameSave(name);
+  } else {
+    return false;
+  }
+
+  renderSidebar();
+  render();
+  return true;
+}
+
+function beginSidebarRename(el, event) {
+  if (!el || !el.dataset.renameReady) return;
+  if (!el.isConnected) return;
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const oldValue = el.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = oldValue;
+  input.className = 'sidebar-rename-input';
+  input.maxLength = 40;
+  const renameId = el.dataset.renameId;
+  activeRenameContext = {
+    id: renameId,
+    save: window.sidebarRenameHandlers && window.sidebarRenameHandlers[renameId],
+  };
+  let finished = false;
+
+  const finish = (shouldSave) => {
+    if (finished) return;
+    finished = true;
+    const next = input.value.trim();
+    const save = activeRenameContext && activeRenameContext.id === renameId ? activeRenameContext.save : null;
+    activeRenameContext = null;
+    input.replaceWith(el);
+    if (shouldSave && next && next !== oldValue) {
+      const saved = saveSidebarRenameTarget(el, next);
+      if (!saved && typeof save === 'function') save(next);
+    } else {
+      el.textContent = oldValue;
+    }
+  };
+
+  input.addEventListener('click', ev => ev.stopPropagation());
+  input.addEventListener('dblclick', ev => ev.stopPropagation());
+  input.addEventListener('pointerdown', ev => ev.stopPropagation(), true);
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') finish(true);
+    if (ev.key === 'Escape') finish(false);
+  });
+
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+function getRenameTarget(eventTarget) {
+  const element = eventTarget && eventTarget.nodeType === Node.TEXT_NODE
+    ? eventTarget.parentElement
+    : eventTarget;
+  if (!element || !element.closest) return null;
+  const direct = element.closest('[data-rename-ready="true"]');
+  if (direct) return direct;
+  if (element.closest('button, input')) return null;
+  const row = element.closest('.sidebar .nav li, .roadmap-projects li, .video-projects li, .calendar-projects li, .custom-lists li, .roadmap-label, .video-label, .calendar-label, .custom-lists-label');
+  return row ? row.querySelector('[data-rename-ready="true"]') : null;
+}
+
+document.querySelector('.sidebar').addEventListener('pointerdown', (e) => {
+  const editable = getRenameTarget(e.target);
+  if (editable) {
+    e.stopPropagation();
+  }
+}, true);
+
+document.querySelector('.sidebar').addEventListener('mousedown', (e) => {
+  const editable = getRenameTarget(e.target);
+  if (!editable) return;
+  e.stopPropagation();
+  if (e.detail >= 2) beginSidebarRename(editable, e);
+}, true);
+
+document.querySelector('.sidebar').addEventListener('click', (e) => {
+  const editable = getRenameTarget(e.target);
+  if (!editable) return;
+  if (e.detail >= 2) {
+    e.preventDefault();
+    e.stopPropagation();
+    beginSidebarRename(editable, e);
+  }
+}, true);
+
+document.querySelector('.sidebar').addEventListener('dblclick', (e) => {
+  const editable = getRenameTarget(e.target);
+  if (editable) beginSidebarRename(editable, e);
+}, true);
+
+/*
+function setupEditableText_old(el, value, onSave) {
+  if (!el) return;
+  el.textContent = value;
+  el.title = '双击重命名';
+  el.onclick = (e) => {
+    e.stopPropagation();
+  };
+  el.ondblclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const oldValue = el.textContent;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = oldValue;
+    input.className = 'sidebar-rename-input';
+    input.maxLength = 40;
+    let finished = false;
+
+    const finish = (shouldSave) => {
+      if (finished) return;
+      finished = true;
+      const next = input.value.trim();
+      input.replaceWith(el);
+      if (shouldSave && next && next !== oldValue) onSave(next);
+      else el.textContent = oldValue;
+    };
+
+    input.addEventListener('click', ev => ev.stopPropagation());
+    input.addEventListener('dblclick', ev => ev.stopPropagation());
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') finish(true);
+      if (ev.key === 'Escape') finish(false);
+    });
+
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+  };
+}
+*/
+
+function ensureStaticLabel(container, className, text, onSave, renameType, renameKey) {
+  if (!container) return;
+  let label = container.querySelector('.' + className);
+  if (!label) {
+    label = document.createElement('span');
+    label.className = className;
+    const button = container.querySelector('button');
+    container.insertBefore(label, button || container.firstChild);
+  }
+  Array.from(container.childNodes).forEach(node => {
+    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) node.remove();
+  });
+  setupEditableText(label, text, onSave, renameType, renameKey);
+}
+
+function renderStaticSidebarLabels() {
+  document.querySelectorAll('.sidebar .nav li').forEach(li => {
+    const id = li.dataset.listId;
+    if (!id) return;
+    let nameEl = li.querySelector('.nav-name');
+    if (!nameEl) {
+      nameEl = document.createElement('span');
+      nameEl.className = 'nav-name';
+      const icon = li.querySelector('.icon');
+      li.insertBefore(nameEl, icon ? icon.nextSibling : li.firstChild);
+    }
+    Array.from(li.childNodes).forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) node.remove();
+    });
+    const defaultName = (defaultLists.find(item => item.id === id) || {}).name || id;
+    nameEl.textContent = defaultName;
+    nameEl.title = '';
+    delete nameEl.dataset.renameReady;
+    delete nameEl.dataset.renameId;
+    nameEl._renameSave = null;
+  });
+
+  ensureStaticLabel(roadmapLabel, 'group-name', getSidebarLabel('group.roadmap'), next => renameSidebarLabel('group.roadmap', next), 'group', 'group.roadmap');
+  ensureStaticLabel(videoLabel, 'group-name', getSidebarLabel('group.video'), next => renameSidebarLabel('group.video', next), 'group', 'group.video');
+  ensureStaticLabel(calendarLabel, 'group-name', getSidebarLabel('group.calendar'), next => renameSidebarLabel('group.calendar', next), 'group', 'group.calendar');
+  ensureStaticLabel(customListsLabel, 'group-name', getSidebarLabel('group.custom'), next => renameSidebarLabel('group.custom', next), 'group', 'group.custom');
+}
+
 function renderSidebar() {
+  renderStaticSidebarLabels();
+
   // update default nav counts (smart lists pull from all lists)
   document.querySelectorAll('.sidebar .nav li').forEach(li => {
         const id = li.dataset.listId;
@@ -387,6 +831,8 @@ function renderSidebar() {
 
   renderRoadmapProjects();
   renderVideoProjects();
+  renderVideoCollections();
+  renderCalendarProjects();
 
   // render custom lists
   const custom = lists.filter(l => !defaultLists.find(d => d.id === l.id));
@@ -396,9 +842,15 @@ function renderSidebar() {
     li.className = cl.id === activeListId ? 'active' : '';
     const activeCount = cl.todos.filter(t => !t.done).length;
     li.innerHTML = `<span class="list-icon"><svg viewBox="0 0 24 24"><circle cx="7" cy="8" r="1.5"/><path d="M10 8h9"/><circle cx="7" cy="16" r="1.5"/><path d="M10 16h9"/></svg></span>
-      <span>${cl.name}</span>
+      <span class="custom-list-name"></span>
       <span class="count">${activeCount || ''}</span>
       <button class="del-list" data-id="${cl.id}" title="删除列表">&times;</button>`;
+    setupEditableText(li.querySelector('.custom-list-name'), cl.name, next => {
+      cl.name = next;
+      saveLists(lists);
+      renderSidebar();
+      render();
+    }, 'customList', cl.id);
     li.addEventListener('click', (e) => {
       if (e.target.classList.contains('del-list')) return;
       switchToList(cl.id);
@@ -435,6 +887,12 @@ function renderRoadmapProjects() {
       <span class="count">${getRoadmapOpenCount(project) || ''}</span>
       <button class="del-roadmap" data-id="${project.id}" title="删除路线图">&times;</button>`;
     li.querySelector('.project-name').textContent = project.title;
+    setupEditableText(li.querySelector('.project-name'), project.title, next => {
+      project.title = next;
+      saveRoadmapProjects();
+      renderSidebar();
+      render();
+    }, 'roadmap', project.id);
     li.addEventListener('click', (e) => {
       if (e.target.classList.contains('del-roadmap')) return;
       switchToList(listId);
@@ -474,6 +932,12 @@ function renderVideoProjects() {
       <button class="del-video" data-id="${video.id}" title="删除视频">&times;</button>`;
     li.querySelector('.video-name').textContent = video.title;
     li.querySelector('.count').textContent = getVideoProgress(video) ? getVideoProgress(video) + '%' : '';
+    setupEditableText(li.querySelector('.video-name'), video.title, next => {
+      video.title = next;
+      saveVideoProjects();
+      renderSidebar();
+      render();
+    }, 'legacyVideo', video.id);
     li.addEventListener('click', (e) => {
       if (e.target.classList.contains('del-video')) return;
       switchToList(listId);
@@ -498,6 +962,97 @@ function renderVideoProjects() {
   });
 }
 
+function renderVideoCollections() {
+  videoProjectsEl.innerHTML = '';
+
+  videoCollections.forEach(collection => {
+    collection = normalizeVideoCollection(collection);
+    const li = document.createElement('li');
+    const listId = 'video-collection:' + collection.id;
+    const done = collection.videos.filter(video => normalizeVideoProject(video).done).length;
+    li.className = activeListId === listId ? 'active' : '';
+    li.dataset.listId = listId;
+    li.innerHTML = `<span class="video-icon"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 7V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2"/></svg></span>
+      <span class="video-name"></span>
+      <span class="count">${collection.videos.length ? done + '/' + collection.videos.length : ''}</span>
+      <button class="del-video" data-id="${collection.id}" title="删除收藏夹">&times;</button>`;
+    li.querySelector('.video-name').textContent = collection.name;
+    setupEditableText(li.querySelector('.video-name'), collection.name, next => {
+      collection.name = next;
+      saveVideoCollections();
+      renderSidebar();
+      render();
+    }, 'videoCollection', collection.id);
+    li.addEventListener('click', (e) => {
+      if (e.target.classList.contains('del-video')) return;
+      switchToList(listId);
+    });
+    videoProjectsEl.appendChild(li);
+  });
+
+  videoProjectsEl.querySelectorAll('.del-video').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm('确定删除这个视频收藏夹以及里面的视频吗？')) return;
+      videoCollections = videoCollections.filter(collection => collection.id !== id);
+      saveVideoCollections();
+      if (activeListId === 'video-collection:' + id) {
+        const next = videoCollections[0] ? 'video-collection:' + videoCollections[0].id : 'videos';
+        switchToList(next);
+      } else {
+        renderSidebar();
+        render();
+      }
+    });
+  });
+}
+
+function renderCalendarProjects() {
+  calendarProjectsEl.innerHTML = '';
+
+  calendarProjects.forEach(project => {
+    project = normalizeCalendarProject(project);
+    const li = document.createElement('li');
+    const listId = 'calendar:' + project.id;
+    li.className = activeListId === listId ? 'active' : '';
+    li.dataset.listId = listId;
+    li.innerHTML = `<span class="calendar-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg></span>
+      <span class="calendar-name"></span>
+      <span class="count">${getCalendarWeekDoneCount(project) || ''}</span>
+      <button class="del-calendar" data-id="${project.id}" title="删除日历项目">&times;</button>`;
+    li.querySelector('.calendar-name').textContent = project.name;
+    setupEditableText(li.querySelector('.calendar-name'), project.name, next => {
+      project.name = next;
+      saveCalendarProjects();
+      renderSidebar();
+      render();
+    }, 'calendar', project.id);
+    li.addEventListener('click', (e) => {
+      if (e.target.classList.contains('del-calendar')) return;
+      switchToList(listId);
+    });
+    calendarProjectsEl.appendChild(li);
+  });
+
+  calendarProjectsEl.querySelectorAll('.del-calendar').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm('确定删除这个日历打卡项目吗？')) return;
+      calendarProjects = calendarProjects.filter(project => project.id !== id);
+      saveCalendarProjects();
+      if (activeListId === 'calendar:' + id) {
+        const next = calendarProjects[0] ? 'calendar:' + calendarProjects[0].id : 'calendar';
+        switchToList(next);
+      } else {
+        renderSidebar();
+        render();
+      }
+    });
+  });
+}
+
 function switchToList(id) {
   activeListId = id;
   localStorage.setItem('activeListId', id);
@@ -505,18 +1060,24 @@ function switchToList(id) {
   const def = defaultLists.find(d => d.id === id);
   const roadmap = getActiveRoadmap();
   const video = getActiveVideo();
-  const l = def || roadmap || video || lists.find(x => x.id === id);
+  const calendarProject = getActiveCalendarProject();
+  const l = def || roadmap || video || calendarProject || lists.find(x => x.id === id);
   if (l) listTitle.textContent = l.name;
+  if (def) listTitle.textContent = def.name;
   if (roadmap) listTitle.textContent = roadmap.title;
   if (video) listTitle.textContent = '视频学习';
   if (id === 'roadmap') listTitle.textContent = '路线图';
   if (id === 'videos') listTitle.textContent = '视频学习';
+  if (calendarProject || id === 'calendar') listTitle.textContent = '日历栏';
+  if (id === 'roadmap') listTitle.textContent = getSidebarLabel('group.roadmap');
+  if (id === 'videos') listTitle.textContent = getSidebarLabel('group.video');
+  if (id === 'calendar' || calendarProject) listTitle.textContent = getSidebarLabel('group.calendar');
   searchQuery = '';
   const si = document.getElementById('searchInput');
   const ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   ns.call(si, '');
   // hide input row for smart lists except myday
-  document.querySelector('.input-row').style.display = ((isSmartList(id) && id !== 'myday') || isRoadmapView(id) || isVideoView(id)) ? 'none' : 'flex';
+  document.querySelector('.input-row').style.display = ((isSmartList(id) && id !== 'myday') || isRoadmapView(id) || isVideoView(id) || isCalendarView(id)) ? 'none' : 'flex';
   renderSidebar();
   render();
 }
@@ -826,7 +1387,7 @@ function updateVideoProgress(video, value) {
   video.done = video.progressPercent >= 100;
   video.updatedAt = new Date().toISOString();
   if (!wasDone && video.done) ding();
-  saveVideoProjects();
+  saveVideoCollections();
   renderVideoGrid();
   renderSidebar();
 }
@@ -1007,12 +1568,328 @@ function renderVideoGrid() {
   countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.avg}%`;
 }
 
+function renderVideoCollectionGrid() {
+  list.innerHTML = '';
+  clearDoneBtn.style.display = 'none';
+  listTitle.textContent = '视频学习';
+  const activeCollection = getActiveVideoCollection();
+
+  if (!activeCollection) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="emoji">□</div><div>请选择一个视频收藏夹</div><div class="hint">点击左侧“视频学习”旁边的 + 新建收藏夹</div>';
+    list.appendChild(empty);
+    countEl.textContent = '每个收藏夹里可以添加一组 B 站视频';
+    return;
+  }
+
+  activeCollection.videos = activeCollection.videos.map(normalizeVideoProject);
+  const stats = getVideoStats();
+  const view = document.createElement('div');
+  view.className = 'video-view video-grid-view';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'video-toolbar';
+  toolbar.innerHTML = `<div class="video-summary">
+      <strong>${activeCollection.name}</strong>
+      <span>${stats.done}/${stats.total} 已完成 · ${stats.avg}%</span>
+    </div>
+    <div class="video-progress"><span style="width:${stats.avg}%"></span></div>`;
+  view.appendChild(toolbar);
+
+  if (!activeCollection.videos.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="emoji">▶</div><div>这个收藏夹还没有视频</div><div class="hint">点击左侧“视频学习”旁边的 +，在当前收藏夹里添加 BV 视频</div>';
+    view.appendChild(empty);
+    list.appendChild(view);
+    countEl.textContent = activeCollection.name + ' · 0 个视频';
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'video-grid';
+
+  activeCollection.videos.forEach(video => {
+    const card = document.createElement('article');
+    card.className = 'video-tile' + (video.done ? ' done' : '');
+    const coverLink = document.createElement('a');
+    coverLink.className = 'video-cover';
+    coverLink.href = video.url;
+    coverLink.target = '_blank';
+    coverLink.rel = 'noopener noreferrer';
+    const img = document.createElement('img');
+    img.src = video.cover || createVideoPlaceholder(video);
+    img.alt = video.title;
+    img.loading = 'lazy';
+    img.onerror = () => { img.src = createVideoPlaceholder(video); };
+    coverLink.appendChild(img);
+    const duration = document.createElement('span');
+    duration.className = 'video-duration';
+    duration.textContent = video.duration ? formatDuration(video.duration) : '--:--';
+    coverLink.appendChild(duration);
+    const body = document.createElement('div');
+    body.className = 'video-tile-body';
+    const titleLink = document.createElement('a');
+    titleLink.className = 'video-title';
+    titleLink.href = video.url;
+    titleLink.target = '_blank';
+    titleLink.rel = 'noopener noreferrer';
+    titleLink.textContent = video.title;
+    const meta = document.createElement('div');
+    meta.className = 'video-meta';
+    meta.textContent = video.bvid || 'Bilibili';
+    const progressRow = document.createElement('div');
+    progressRow.className = 'video-tile-progress-row';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'video-tile-progress';
+    progressBar.innerHTML = `<span style="width:${getVideoProgress(video)}%"></span>`;
+    const percent = document.createElement('span');
+    percent.className = 'video-percent';
+    percent.textContent = getVideoProgress(video) + '%';
+    progressRow.appendChild(progressBar);
+    progressRow.appendChild(percent);
+    const controls = document.createElement('div');
+    controls.className = 'video-controls';
+    const check = document.createElement('button');
+    check.type = 'button';
+    check.className = 'video-check';
+    check.title = video.done ? '标记为未完成' : '标记为已完成';
+    check.setAttribute('aria-label', check.title);
+    check.addEventListener('click', () => updateVideoProgress(video, video.done ? 0 : 100));
+    const range = document.createElement('input');
+    range.type = 'range';
+    range.min = '0';
+    range.max = '100';
+    range.step = '1';
+    range.value = String(getVideoProgress(video));
+    range.addEventListener('input', () => {
+      progressBar.querySelector('span').style.width = range.value + '%';
+      percent.textContent = clampPercent(range.value) + '%';
+    });
+    range.addEventListener('change', () => updateVideoProgress(video, range.value));
+    controls.appendChild(check);
+    controls.appendChild(range);
+    body.appendChild(titleLink);
+    body.appendChild(meta);
+    body.appendChild(progressRow);
+    body.appendChild(controls);
+    card.appendChild(coverLink);
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+
+  view.appendChild(grid);
+  list.appendChild(view);
+  countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.avg}%`;
+}
+
+function renderCalendar() {
+  list.innerHTML = '';
+  clearDoneBtn.style.display = 'none';
+  listTitle.textContent = '日历栏';
+  calendarProjects = calendarProjects.map(normalizeCalendarProject);
+
+  if (!calendarProjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="emoji">□</div><div>还没有日历打卡项目</div><div class="hint">点击左侧“日历栏”旁边的 +，添加练琴、运动这类项目</div>';
+    list.appendChild(empty);
+    countEl.textContent = '添加项目后，可以在本周日历上直接勾选';
+    return;
+  }
+
+  const weekDates = getWeekDates();
+  const todayKey = toDateKey(new Date());
+  const activeProject = getActiveCalendarProject();
+  const stats = getCalendarStats();
+  const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+  const view = document.createElement('div');
+  view.className = 'calendar-view';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'calendar-toolbar';
+  toolbar.innerHTML = `<div class="calendar-summary">
+      <strong>本周打卡</strong>
+      <span>${stats.done}/${stats.total} 已完成 · ${stats.percent}%</span>
+    </div>
+    <div class="calendar-progress"><span style="width:${stats.percent}%"></span></div>`;
+  view.appendChild(toolbar);
+
+  const grid = document.createElement('div');
+  grid.className = 'calendar-grid';
+  const corner = document.createElement('div');
+  corner.className = 'calendar-corner';
+  corner.textContent = '项目';
+  grid.appendChild(corner);
+
+  weekDates.forEach((date, index) => {
+    const key = toDateKey(date);
+    const head = document.createElement('div');
+    head.className = 'calendar-day-head' + (key === todayKey ? ' today' : '');
+    head.innerHTML = `<span>周${weekdays[index]}</span><strong>${date.getMonth() + 1}/${date.getDate()}</strong>`;
+    grid.appendChild(head);
+  });
+
+  calendarProjects.forEach(project => {
+    const name = document.createElement('div');
+    name.className = 'calendar-project-name' + (activeProject && activeProject.id === project.id ? ' active' : '');
+    name.textContent = project.name;
+    name.addEventListener('click', () => switchToList('calendar:' + project.id));
+    grid.appendChild(name);
+
+    weekDates.forEach(date => {
+      const key = toDateKey(date);
+      const done = !!(project.days && project.days[key]);
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'calendar-cell' + (done ? ' done' : '') + (key === todayKey ? ' today' : '');
+      cell.title = `${project.name} · ${key}`;
+      cell.setAttribute('aria-label', cell.title);
+      cell.addEventListener('click', () => {
+        if (!project.days) project.days = {};
+        if (project.days[key]) delete project.days[key];
+        else {
+          project.days[key] = true;
+          ding();
+        }
+        saveCalendarProjects();
+        renderCalendar();
+        renderSidebar();
+      });
+      grid.appendChild(cell);
+    });
+  });
+
+  view.appendChild(grid);
+  list.appendChild(view);
+  countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.percent}%`;
+}
+
+function renderMonthCalendar() {
+  list.innerHTML = '';
+  clearDoneBtn.style.display = 'none';
+  listTitle.textContent = '日历栏';
+  calendarProjects = calendarProjects.map(normalizeCalendarProject);
+
+  if (!calendarProjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.innerHTML = '<div class="emoji">□</div><div>还没有日历打卡项目</div><div class="hint">点击左侧“日历栏”旁边的 +，添加练琴、运动这类项目</div>';
+    list.appendChild(empty);
+    countEl.textContent = '添加项目后，可以在月历上直接打卡';
+    return;
+  }
+
+  const monthBase = new Date();
+  const monthDates = getMonthDates(monthBase);
+  const todayKey = toDateKey(new Date());
+  const activeProject = getActiveCalendarProject();
+  const stats = getCalendarMonthStats(activeProject, monthBase);
+  const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+  const monthLabel = `${monthBase.getFullYear()}年${monthBase.getMonth() + 1}月`;
+
+  const view = document.createElement('div');
+  view.className = 'calendar-view month-calendar-view';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'calendar-toolbar';
+  toolbar.innerHTML = `<div class="calendar-summary">
+      <div class="calendar-title-row">
+        <span class="calendar-title-badge">${activeProject ? activeProject.name.charAt(0).toUpperCase() : '日'}</span>
+        <strong>${activeProject ? activeProject.name : '日历栏'} · ${monthLabel}</strong>
+      </div>
+      <span>${stats.done}/${stats.total} 已完成 · ${stats.percent}%</span>
+    </div>
+    <div class="calendar-progress"><span style="width:${stats.percent}%"></span></div>`;
+  view.appendChild(toolbar);
+
+  const helper = document.createElement('div');
+  helper.className = 'calendar-project-hint';
+  helper.textContent = activeProject
+    ? '点击日期即可为当前项目打卡或取消打卡。'
+    : '在左侧选择一个项目后，可以直接在这个月历上点击日期打卡。';
+  view.appendChild(helper);
+
+  if (activeProject) {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'calendar-back';
+    back.textContent = '查看全部项目';
+    back.addEventListener('click', () => switchToList('calendar'));
+    view.appendChild(back);
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'month-calendar-grid';
+
+  weekdays.forEach(day => {
+    const head = document.createElement('div');
+    head.className = 'month-weekday';
+    head.textContent = day;
+    grid.appendChild(head);
+  });
+
+  monthDates.forEach(date => {
+    const key = toDateKey(date);
+    const inMonth = date.getMonth() === monthBase.getMonth();
+    const doneProjects = calendarProjects.filter(project => project.days && project.days[key]);
+    const isDone = activeProject ? !!(activeProject.days && activeProject.days[key]) : doneProjects.length > 0;
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'month-day' + (inMonth ? '' : ' outside') + (key === todayKey ? ' today' : '') + (isDone ? ' done' : '');
+    cell.title = activeProject ? `${activeProject.name} · ${key}` : `${key} · ${doneProjects.length} 个项目完成`;
+    cell.setAttribute('aria-label', cell.title);
+
+    const dayNum = document.createElement('span');
+    dayNum.className = 'month-day-number';
+    dayNum.textContent = String(date.getDate());
+    cell.appendChild(dayNum);
+
+    const marker = document.createElement('span');
+    marker.className = 'month-day-marker';
+    marker.textContent = activeProject ? (isDone ? '已打卡' : '未打卡') : (doneProjects.length ? `${doneProjects.length}/${calendarProjects.length}` : '未打卡');
+    cell.appendChild(marker);
+
+    if (!inMonth) {
+      cell.disabled = true;
+    } else if (activeProject) {
+      cell.addEventListener('click', () => {
+        if (!activeProject.days) activeProject.days = {};
+        if (activeProject.days[key]) delete activeProject.days[key];
+        else {
+          activeProject.days[key] = true;
+          ding();
+        }
+        saveCalendarProjects();
+        renderMonthCalendar();
+        renderSidebar();
+      });
+    } else {
+      cell.addEventListener('click', () => {
+        alert('请先在左侧选择一个日历项目，例如“练琴”或“运动”，再在月历上打卡。');
+      });
+    }
+
+    grid.appendChild(cell);
+  });
+
+  view.appendChild(grid);
+  list.appendChild(view);
+  countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.percent}%`;
+}
+
 function render() {
   list.innerHTML = '';
   clearDoneBtn.style.display = '';
 
   if (isVideoView(activeListId)) {
-    renderVideoGrid();
+    renderVideoCollectionGrid();
+    return;
+  }
+
+  if (isCalendarView(activeListId)) {
+    renderMonthCalendar();
     return;
   }
 
@@ -1403,6 +2280,52 @@ videoLabel.addEventListener('click', (e) => {
   switchToList('videos');
 });
 
+addVideoBtn.addEventListener('click', async (e) => {
+  e.stopImmediatePropagation();
+  let collection = getActiveVideoCollection();
+  if (!collection) {
+    const name = (prompt('新建视频收藏夹名称，例如：CUDA 学习、绘画教程') || '').trim();
+    if (!name) return;
+    collection = normalizeVideoCollection({
+      id: 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      name,
+      videos: [],
+      createdAt: new Date().toISOString(),
+    });
+    videoCollections.push(collection);
+    saveVideoCollections();
+    switchToList('video-collection:' + collection.id);
+    return;
+  }
+
+  const inputValue = prompt('输入 B 站视频 BV 号，添加到“' + collection.name + '”');
+  if (!inputValue) return;
+  const video = await buildVideoFromBvid(inputValue.trim());
+  if (!video) return;
+  collection.videos.push(video);
+  saveVideoCollections();
+  switchToList('video-collection:' + collection.id);
+}, true);
+
+addCalendarBtn.addEventListener('click', () => {
+  const name = (prompt('添加日历打卡项目，例如：练琴、运动') || '').trim();
+  if (!name) return;
+  const project = normalizeCalendarProject({
+    id: 'calendar_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    name,
+    days: {},
+    createdAt: new Date().toISOString(),
+  });
+  calendarProjects.push(project);
+  saveCalendarProjects();
+  switchToList('calendar:' + project.id);
+});
+
+calendarLabel.addEventListener('click', (e) => {
+  if (e.target === addCalendarBtn) return;
+  switchToList('calendar');
+});
+
 roadmapFileInput.addEventListener('change', () => {
   const files = Array.from(roadmapFileInput.files || []);
   if (!files.length) return;
@@ -1675,6 +2598,8 @@ function buildSnapshot() {
     todoLists: lists,
     roadmapProjects,
     videoProjects: videoProjects.map(normalizeVideoProject),
+    videoCollections: videoCollections.map(normalizeVideoCollection),
+    calendarProjects: calendarProjects.map(normalizeCalendarProject),
     settings: {
       theme: getTheme(),
       username: usernameEl.textContent || 'Lenovo',
@@ -1685,6 +2610,7 @@ function buildSnapshot() {
       customBgIdx: customIdx,
       cardOpacity: getSettingValue('cardOpacity', '0.92'),
       cardBlur: getSettingValue('cardBlur', '8'),
+      sidebarLabels,
     },
     updatedAt: new Date().toISOString(),
   };
@@ -1697,6 +2623,8 @@ function hasLocalUserData(snapshot) {
   });
   const hasRoadmaps = snapshot.roadmapProjects.length > 0;
   const hasVideos = Array.isArray(snapshot.videoProjects) && snapshot.videoProjects.length > 0;
+  const hasVideoCollections = Array.isArray(snapshot.videoCollections) && snapshot.videoCollections.length > 0;
+  const hasCalendars = Array.isArray(snapshot.calendarProjects) && snapshot.calendarProjects.length > 0;
   const settings = snapshot.settings;
   const hasCustomSettings = settings.username !== 'Lenovo'
     || settings.theme !== (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -1704,8 +2632,9 @@ function hasLocalUserData(snapshot) {
     || Number(settings.bgIndex) !== 0
     || settings.customBgs.length > 0
     || settings.cardOpacity !== '0.92'
-    || settings.cardBlur !== '8';
-  return hasTodos || hasRoadmaps || hasVideos || hasCustomSettings;
+    || settings.cardBlur !== '8'
+    || JSON.stringify(settings.sidebarLabels || DEFAULT_SIDEBAR_LABELS) !== JSON.stringify(DEFAULT_SIDEBAR_LABELS);
+  return hasTodos || hasRoadmaps || hasVideos || hasVideoCollections || hasCalendars || hasCustomSettings;
 }
 
 function saveLocalSnapshot(snapshot) {
@@ -1723,10 +2652,17 @@ function applySnapshot(snapshot) {
     lists = Array.isArray(snapshot.todoLists) ? snapshot.todoLists.filter(l => l.id !== 'roadmap') : loadLists();
     roadmapProjects = Array.isArray(snapshot.roadmapProjects) ? snapshot.roadmapProjects : [];
     videoProjects = Array.isArray(snapshot.videoProjects) ? snapshot.videoProjects.map(normalizeVideoProject) : [];
+    videoCollections = Array.isArray(snapshot.videoCollections) && snapshot.videoCollections.length
+      ? snapshot.videoCollections.map(normalizeVideoCollection)
+      : (videoProjects.length ? [normalizeVideoCollection({ id: 'video_collection_default', name: '默认收藏夹', videos: videoProjects })] : []);
+    videoProjects = videoCollections.flatMap(collection => collection.videos);
+    calendarProjects = Array.isArray(snapshot.calendarProjects) ? snapshot.calendarProjects.map(normalizeCalendarProject) : [];
 
     localStorage.setItem('todoLists', JSON.stringify(lists));
     localStorage.setItem('roadmapProjects', JSON.stringify(roadmapProjects));
     localStorage.setItem('videoProjects', JSON.stringify(videoProjects));
+    localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
+    localStorage.setItem('calendarProjects', JSON.stringify(calendarProjects));
 
     if (settings.theme) applyTheme(settings.theme);
     if (settings.username) {
@@ -1734,6 +2670,13 @@ function applySnapshot(snapshot) {
       avatarEl.textContent = settings.username.charAt(0).toUpperCase();
       localStorage.setItem('username', settings.username);
     }
+
+    sidebarLabels = { ...DEFAULT_SIDEBAR_LABELS, ...(settings.sidebarLabels || {}) };
+    delete sidebarLabels['nav.myday'];
+    delete sidebarLabels['nav.important'];
+    delete sidebarLabels['nav.planned'];
+    delete sidebarLabels['nav.tasks'];
+    localStorage.setItem('sidebarLabels', JSON.stringify(sidebarLabels));
 
     bgType = settings.bgType || 'preset';
     bgIndex = Number.isFinite(Number(settings.bgIndex)) ? Number(settings.bgIndex) : 0;
@@ -1752,8 +2695,10 @@ function applySnapshot(snapshot) {
 
     activeListId = settings.activeListId || 'tasks';
     if (isRoadmapView(activeListId) && !getActiveRoadmap()) activeListId = 'tasks';
-    if (activeListId !== 'videos' && isVideoView(activeListId) && !getActiveVideo()) activeListId = 'videos';
-    if (!isRoadmapView(activeListId) && !isVideoView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
+    if (activeListId.startsWith('video:')) activeListId = videoCollections[0] ? 'video-collection:' + videoCollections[0].id : 'videos';
+    if (activeListId !== 'videos' && activeListId.startsWith('video-collection:') && !getActiveVideoCollection()) activeListId = 'videos';
+    if (activeListId !== 'calendar' && isCalendarView(activeListId) && !getActiveCalendarProject()) activeListId = 'calendar';
+    if (!isRoadmapView(activeListId) && !isVideoView(activeListId) && !isCalendarView(activeListId) && !defaultLists.some(d => d.id === activeListId) && !lists.some(l => l.id === activeListId)) {
       activeListId = 'tasks';
     }
     localStorage.setItem('activeListId', activeListId);
