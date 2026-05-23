@@ -1394,7 +1394,7 @@ function updateVideoProgress(video, value) {
   video.updatedAt = new Date().toISOString();
   if (!wasDone && video.done) ding();
   saveVideoCollections();
-  renderVideoGrid();
+  renderVideoCollectionGrid();
   renderSidebar();
 }
 
@@ -1643,12 +1643,21 @@ function renderVideoCollectionGrid() {
       <span>${stats.done}/${stats.total} 已完成 · ${stats.avg}%</span>
     </div>
     <div class="video-progress"><span style="width:${stats.avg}%"></span></div>`;
+  const toolbarActions = document.createElement('div');
+  toolbarActions.className = 'video-toolbar-actions';
+  const addVideoToCollectionBtn = document.createElement('button');
+  addVideoToCollectionBtn.type = 'button';
+  addVideoToCollectionBtn.className = 'video-add-btn';
+  addVideoToCollectionBtn.textContent = '添加视频';
+  addVideoToCollectionBtn.addEventListener('click', () => addVideoToCollection(activeCollection));
+  toolbarActions.appendChild(addVideoToCollectionBtn);
+  toolbar.appendChild(toolbarActions);
   view.appendChild(toolbar);
 
   if (!activeCollection.videos.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.innerHTML = '<div class="emoji">▶</div><div>这个收藏夹还没有视频</div><div class="hint">点击左侧“视频学习”旁边的 +，在当前收藏夹里添加 BV 视频</div>';
+    empty.innerHTML = '<div class="emoji">▶</div><div>这个收藏夹还没有视频</div><div class="hint">点击右上方“添加视频”，把 BV 视频加入当前收藏夹</div>';
     view.appendChild(empty);
     list.appendChild(view);
     countEl.textContent = activeCollection.name + ' · 0 个视频';
@@ -2314,39 +2323,23 @@ async function buildVideoFromBvid(inputValue) {
   });
 }
 
-addVideoBtn.addEventListener('click', async () => {
-  const inputValue = prompt('输入 B 站视频 BV 号，例如 BV1GJ411x7h7');
-  if (!inputValue) return;
-  const video = await buildVideoFromBvid(inputValue.trim());
-  if (!video) return;
-  videoProjects.push(video);
-  saveVideoProjects();
-  switchToList('video:' + video.id);
-});
+function createVideoCollection() {
+  const name = (prompt('新建视频收藏夹名称，例如：CUDA 学习、绘画教程') || '').trim();
+  if (!name) return null;
+  const collection = normalizeVideoCollection({
+    id: 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    name,
+    videos: [],
+    createdAt: new Date().toISOString(),
+  });
+  videoCollections.push(collection);
+  saveVideoCollections();
+  switchToList('video-collection:' + collection.id);
+  return collection;
+}
 
-videoLabel.addEventListener('click', (e) => {
-  if (e.target === addVideoBtn) return;
-  switchToList('videos');
-});
-
-addVideoBtn.addEventListener('click', async (e) => {
-  e.stopImmediatePropagation();
-  let collection = getActiveVideoCollection();
-  if (!collection) {
-    const name = (prompt('新建视频收藏夹名称，例如：CUDA 学习、绘画教程') || '').trim();
-    if (!name) return;
-    collection = normalizeVideoCollection({
-      id: 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-      name,
-      videos: [],
-      createdAt: new Date().toISOString(),
-    });
-    videoCollections.push(collection);
-    saveVideoCollections();
-    switchToList('video-collection:' + collection.id);
-    return;
-  }
-
+async function addVideoToCollection(collection) {
+  if (!collection) return;
   const inputValue = prompt('输入 B 站视频 BV 号，添加到“' + collection.name + '”');
   if (!inputValue) return;
   const video = await buildVideoFromBvid(inputValue.trim());
@@ -2354,6 +2347,16 @@ addVideoBtn.addEventListener('click', async (e) => {
   collection.videos.push(video);
   saveVideoCollections();
   switchToList('video-collection:' + collection.id);
+}
+
+videoLabel.addEventListener('click', (e) => {
+  if (e.target === addVideoBtn) return;
+  switchToList('videos');
+});
+
+addVideoBtn.addEventListener('click', (e) => {
+  e.stopImmediatePropagation();
+  createVideoCollection();
 }, true);
 
 addCalendarBtn.addEventListener('click', () => {

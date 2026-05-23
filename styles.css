@@ -1492,6 +1492,28 @@ body {
   transition: width 0.2s ease;
 }
 
+.video-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.video-add-btn {
+  border: 1px solid rgba(96, 165, 250, 0.55);
+  border-radius: 8px;
+  background: rgba(96, 165, 250, 0.12);
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 12px;
+}
+
+.video-add-btn:hover {
+  background: rgba(96, 165, 250, 0.2);
+}
+
 .video-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -1690,6 +1712,11 @@ body {
   .video-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .video-toolbar-actions,
+  .video-add-btn {
+    width: 100%;
   }
 
   .video-grid {
