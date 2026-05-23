@@ -434,6 +434,7 @@ function normalizeVideoProject(video) {
     progressPercent: progress,
     done,
     completedAt: done && video.completedAt ? video.completedAt : null,
+    myDay: video.myDay || null,
     createdAt: video.createdAt || nowIso,
     updatedAt: video.updatedAt || video.createdAt || nowIso,
   };
@@ -471,6 +472,28 @@ function getVideoStats() {
     ? Math.round(videos.reduce((sum, video) => sum + getVideoProgress(video), 0) / total)
     : 0;
   return { total, done, avg };
+}
+
+function getMyDayVideoEntries() {
+  const today = todayStr();
+  const entries = [];
+  videoCollections.forEach(collection => {
+    (collection.videos || []).forEach(video => {
+      if (video.myDay === today) entries.push({ collection, video });
+    });
+  });
+  return entries;
+}
+
+function getMyDayVideoSuggestions() {
+  const today = todayStr();
+  const entries = [];
+  videoCollections.forEach(collection => {
+    (collection.videos || []).forEach(video => {
+      if (!video.done && video.myDay !== today) entries.push({ collection, video });
+    });
+  });
+  return entries;
 }
 
 function toDateKey(date) {
@@ -1437,11 +1460,13 @@ function renderSidebar() {
   // update default nav counts (smart lists pull from all lists)
   document.querySelectorAll('.sidebar .nav li').forEach(li => {
         const id = li.dataset.listId;
-        const countEl = li.querySelector('.count');
-        if (!countEl || !id) return;
-        if (isSmartList(id)) {
-          countEl.textContent = getSmartListTodos(id).filter(t => !t.done).length || '';
-        } else {
+      const countEl = li.querySelector('.count');
+      if (!countEl || !id) return;
+      if (isSmartList(id)) {
+          const smartCount = getSmartListTodos(id).filter(t => !t.done).length
+            + (id === 'myday' ? getMyDayVideoEntries().filter(entry => !entry.video.done).length : 0);
+          countEl.textContent = smartCount || '';
+      } else {
           countEl.textContent = getListCount(id) || '';
     }
   });
@@ -2006,7 +2031,7 @@ function createVideoPlaceholder(video) {
   return `https://placehold.co/640x360/202020/60a5fa?text=${title}`;
 }
 
-function updateVideoProgress(video, value) {
+function updateVideoProgress(video, value, afterRender) {
   const wasDone = video.done;
   video.progressPercent = clampPercent(value);
   video.done = video.progressPercent >= 100;
@@ -2014,7 +2039,8 @@ function updateVideoProgress(video, value) {
   video.updatedAt = new Date().toISOString();
   if (!wasDone && video.done) ding();
   saveVideoCollections();
-  renderVideoCollectionGrid();
+  if (typeof afterRender === 'function') afterRender();
+  else renderVideoCollectionGrid();
   renderSidebar();
 }
 
@@ -2600,8 +2626,78 @@ function render() {
         }
       });
     });
+    const videoEntries = getMyDayVideoEntries();
+    const videoSuggestions = getMyDayVideoSuggestions();
 
-    if (suggestions.length > 0) {
+    if (videoEntries.length > 0) {
+      const videoDiv = document.createElement('div');
+      videoDiv.className = 'suggestions myday-video-section';
+      videoDiv.innerHTML = '<div class="suggest-label">今日视频学习</div>';
+      videoEntries.forEach(entry => {
+        const item = document.createElement('div');
+        item.className = 'myday-video-card' + (entry.video.done ? ' done' : '');
+        const cover = document.createElement('a');
+        cover.className = 'myday-video-cover';
+        cover.href = entry.video.url;
+        cover.target = '_blank';
+        cover.rel = 'noopener noreferrer';
+        const img = document.createElement('img');
+        img.src = entry.video.cover || createVideoPlaceholder(entry.video);
+        img.alt = entry.video.title;
+        img.loading = 'lazy';
+        img.onerror = () => { img.src = createVideoPlaceholder(entry.video); };
+        cover.appendChild(img);
+        const duration = document.createElement('span');
+        duration.className = 'video-duration';
+        duration.textContent = entry.video.duration ? formatDuration(entry.video.duration) : '--:--';
+        cover.appendChild(duration);
+        const body = document.createElement('div');
+        body.className = 'myday-video-body';
+        const text = document.createElement('span');
+        text.className = 'suggest-text';
+        text.textContent = entry.video.title;
+        const source = document.createElement('span');
+        source.className = 'suggest-source';
+        source.textContent = `${entry.collection.name} · ${getVideoProgress(entry.video)}%`;
+        text.appendChild(source);
+        const progress = document.createElement('div');
+        progress.className = 'myday-video-progress';
+        progress.innerHTML = `<span style="width:${getVideoProgress(entry.video)}%"></span>`;
+        const actions = document.createElement('div');
+        actions.className = 'actions myday-video-actions';
+        const doneBtn = document.createElement('button');
+        doneBtn.className = 'myday-video-check';
+        doneBtn.title = entry.video.done ? '标记为未完成' : '标记为已完成';
+        doneBtn.setAttribute('aria-label', doneBtn.title);
+        doneBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          updateVideoProgress(entry.video, entry.video.done ? 0 : 100, render);
+        });
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'myday-btn active';
+        removeBtn.textContent = '☀️';
+        removeBtn.title = '从“我的一天”移除';
+        removeBtn.setAttribute('aria-label', removeBtn.title);
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          entry.video.myDay = null;
+          saveVideoCollections();
+          render();
+          renderSidebar();
+        });
+        body.appendChild(text);
+        body.appendChild(progress);
+        body.appendChild(actions);
+        item.appendChild(doneBtn);
+        item.appendChild(cover);
+        item.appendChild(body);
+        actions.appendChild(removeBtn);
+        videoDiv.appendChild(item);
+      });
+      list.appendChild(videoDiv);
+    }
+
+    if (suggestions.length > 0 || videoSuggestions.length > 0) {
       const suggestDiv = document.createElement('div');
       suggestDiv.className = 'suggestions';
       suggestDiv.innerHTML = '<div class="suggest-label">建议</div>';
@@ -2621,8 +2717,33 @@ function render() {
         item.appendChild(addBtn);
         suggestDiv.appendChild(item);
       });
+      videoSuggestions.forEach(s => {
+        const item = document.createElement('div');
+        item.className = 'suggest-item video-suggest-item';
+        const text = document.createElement('span');
+        text.className = 'suggest-text';
+        text.textContent = s.video.title;
+        const source = document.createElement('span');
+        source.className = 'suggest-source';
+        source.textContent = `${s.collection.name} · 视频学习`;
+        text.appendChild(source);
+        const addBtn = document.createElement('button');
+        addBtn.className = 'add-to-myday';
+        addBtn.textContent = '+';
+        addBtn.title = '添加到“我的一天”';
+        addBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          s.video.myDay = todayStr();
+          saveVideoCollections();
+          render();
+          renderSidebar();
+        });
+        item.appendChild(text);
+        item.appendChild(addBtn);
+        suggestDiv.appendChild(item);
+      });
       list.appendChild(suggestDiv);
-    } else if (visible.length === 0) {
+    } else if (visible.length === 0 && videoEntries.length === 0) {
       list.innerHTML = `<div class="empty-state">
         <div class="emoji">☀️</div>
         <div>今天所有任务都已加入</div>
@@ -2775,7 +2896,8 @@ function render() {
     list.appendChild(li);
   }
 
-  const activeCount = todos.filter(t => !t.done).length;
+  const activeCount = todos.filter(t => !t.done).length
+    + (activeListId === 'myday' ? getMyDayVideoEntries().filter(entry => !entry.video.done).length : 0);
   countEl.textContent = activeCount === 0 ? '全部完成 ✓' : `${activeCount} 项待完成`;
 }
 
