@@ -686,13 +686,154 @@ function setAiStatus(message, state) {
   aiSummaryStatus.className = 'ai-status' + (state ? ' ' + state : '');
 }
 
+function appendAiText(parent, text) {
+  const node = document.createElement('p');
+  node.textContent = String(text || '').trim() || '暂无内容。';
+  parent.appendChild(node);
+}
+
+function normalizeAiCard(card) {
+  if (typeof card === 'string') return { summary: card, bullets: [] };
+  card = card || {};
+  return {
+    summary: String(card.summary || '').trim(),
+    bullets: Array.isArray(card.bullets)
+      ? card.bullets.map(item => String(item || '').trim()).filter(Boolean).slice(0, 6)
+      : [],
+  };
+}
+
+function parseAiJsonContent(content) {
+  const raw = String(content || '').trim();
+  if (!raw) return null;
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const text = fenced ? fenced[1].trim() : raw;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') return parsed;
+  } catch (e) {}
+  return null;
+}
+
+function splitLegacyAiContent(content) {
+  const raw = String(content || '').trim();
+  if (!raw) return {};
+  const sectionMap = [
+    ['overview', /完成概况|概况|总结/],
+    ['highlights', /亮点|做得好|优势/],
+    ['problems', /问题|不足|风险|卡点/],
+    ['nextSteps', /下一步建议|建议|下一步|行动/],
+  ];
+  const lines = raw.split(/\r?\n/);
+  const sections = {};
+  let current = 'overview';
+  sections[current] = [];
+
+  lines.forEach(line => {
+    const clean = line.replace(/^#+\s*/, '').replace(/^[\s>*-]*\d*[.、)]?\s*/, '').trim();
+    const matched = sectionMap.find(([, pattern]) => pattern.test(clean.replace(/[:：]$/, '')));
+    if (matched && clean.length <= 18) {
+      current = matched[0];
+      if (!sections[current]) sections[current] = [];
+      return;
+    }
+    if (!sections[current]) sections[current] = [];
+    if (clean) sections[current].push(clean);
+  });
+
+  return Object.fromEntries(Object.entries(sections).map(([key, values]) => {
+    const bullets = values.filter(line => /^[-*•]/.test(line)).map(line => line.replace(/^[-*•]\s*/, ''));
+    const prose = values.filter(line => !/^[-*•]/.test(line));
+    return [key, {
+      summary: prose[0] || values[0] || '',
+      bullets: bullets.length ? bullets : prose.slice(1, 6),
+    }];
+  }));
+}
+
+function getAiDisplayData(summary) {
+  const parsed = parseAiJsonContent(summary && summary.content);
+  if (parsed) {
+    return {
+      overview: normalizeAiCard(parsed.overview),
+      highlights: normalizeAiCard(parsed.highlights),
+      problems: normalizeAiCard(parsed.problems),
+      nextSteps: normalizeAiCard(parsed.nextSteps),
+    };
+  }
+  const legacy = splitLegacyAiContent(summary && summary.content);
+  return {
+    overview: normalizeAiCard(legacy.overview || { summary: summary && summary.content }),
+    highlights: normalizeAiCard(legacy.highlights),
+    problems: normalizeAiCard(legacy.problems),
+    nextSteps: normalizeAiCard(legacy.nextSteps),
+  };
+}
+
+function renderAiStats(stats) {
+  const grid = document.createElement('div');
+  grid.className = 'ai-stats-grid';
+  const items = [
+    ['Todo', stats.completedTodos || 0],
+    ['路线图', stats.completedRoadmapTasks || 0],
+    ['视频', stats.completedVideos || 0],
+    ['打卡', stats.calendarCheckins || 0],
+    ['时间未知', stats.unknownCompleted || 0],
+  ];
+  items.forEach(([label, value]) => {
+    const item = document.createElement('div');
+    item.className = 'ai-stat-item';
+    item.innerHTML = `<strong>${value}</strong><span>${label}</span>`;
+    grid.appendChild(item);
+  });
+  return grid;
+}
+
+function renderAiCard(title, card, tone) {
+  const section = document.createElement('section');
+  section.className = 'ai-summary-card' + (tone ? ' ' + tone : '');
+  const heading = document.createElement('h3');
+  heading.className = 'ai-card-title';
+  heading.textContent = title;
+  section.appendChild(heading);
+  appendAiText(section, card.summary);
+  if (card.bullets && card.bullets.length) {
+    const listEl = document.createElement('ul');
+    listEl.className = 'ai-card-list';
+    card.bullets.forEach(item => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      listEl.appendChild(li);
+    });
+    section.appendChild(listEl);
+  }
+  return section;
+}
+
 function renderAiSummaryContent(summary) {
   if (!aiSummaryResult) return;
+  aiSummaryResult.innerHTML = '';
   if (!summary) {
-    aiSummaryResult.textContent = '这个时间段还没有保存的总结。';
+    const empty = document.createElement('div');
+    empty.className = 'ai-result-empty';
+    empty.textContent = '这个时间段还没有保存的总结。';
+    aiSummaryResult.appendChild(empty);
     return;
   }
-  aiSummaryResult.textContent = summary.content || '这个总结没有内容。';
+  const title = document.createElement('div');
+  title.className = 'ai-result-title';
+  title.innerHTML = `<strong>${summary.title || 'AI 总结'}</strong><span>${summary.updatedAt ? '更新于 ' + summary.updatedAt.slice(0, 16).replace('T', ' ') : ''}</span>`;
+  aiSummaryResult.appendChild(title);
+  aiSummaryResult.appendChild(renderAiStats(summary.inputStats || {}));
+
+  const data = getAiDisplayData(summary);
+  const cards = document.createElement('div');
+  cards.className = 'ai-card-grid';
+  cards.appendChild(renderAiCard('完成概况', data.overview, 'overview'));
+  cards.appendChild(renderAiCard('亮点', data.highlights, 'highlights'));
+  cards.appendChild(renderAiCard('问题', data.problems, 'problems'));
+  cards.appendChild(renderAiCard('下一步建议', data.nextSteps, 'next'));
+  aiSummaryResult.appendChild(cards);
 }
 
 function renderAiHistory() {
@@ -755,7 +896,10 @@ function closeAiSummaryModal() {
 function buildDeepSeekPrompt(inputData) {
   return [
     '请基于下面这份任务数据，生成一份中文' + (inputData.type === 'weekly' ? '每周' : '每日') + '总结和评价。',
-    '要求：简洁、具体、有判断；必须包含“完成概况 / 亮点 / 问题 / 下一步建议”四段；不要空泛鸡汤，要引用真实任务名称。',
+    '只返回合法 JSON，不要 Markdown，不要代码块，不要额外解释。',
+    'JSON 字段必须严格为：{"overview":{"summary":"","bullets":[]},"highlights":{"summary":"","bullets":[]},"problems":{"summary":"","bullets":[]},"nextSteps":{"summary":"","bullets":[]}}。',
+    '四个字段分别对应“完成概况 / 亮点 / 问题 / 下一步建议”。summary 用一句具体评价，bullets 放 2 到 4 条要点。',
+    '要求：简洁、具体、有判断；不要空泛鸡汤，要引用真实任务名称。',
     '如果完成时间未知，只说明旧完成项无法归入本周期，不要把它们算作本周期成果。',
     '',
     JSON.stringify(inputData, null, 2),
