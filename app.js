@@ -432,6 +432,11 @@ function getCalendarWeekDoneCount(project) {
   return getWeekDates().filter(date => days[toDateKey(date)]).length;
 }
 
+function getCalendarTodayOpenCount(project) {
+  const days = project.days || {};
+  return days[toDateKey(new Date())] ? 0 : 1;
+}
+
 function getCalendarStats() {
   const weekDates = getWeekDates();
   const total = calendarProjects.length * weekDates.length;
@@ -1019,7 +1024,7 @@ function renderCalendarProjects() {
     li.dataset.listId = listId;
     li.innerHTML = `<span class="calendar-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg></span>
       <span class="calendar-name"></span>
-      <span class="count">${getCalendarWeekDoneCount(project) || ''}</span>
+      <span class="count">${getCalendarTodayOpenCount(project) || ''}</span>
       <button class="del-calendar" data-id="${project.id}" title="删除日历项目">&times;</button>`;
     li.querySelector('.calendar-name').textContent = project.name;
     setupEditableText(li.querySelector('.calendar-name'), project.name, next => {
