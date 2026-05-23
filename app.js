@@ -136,6 +136,7 @@ const aiSummaryHistory = document.getElementById('aiSummaryHistory');
 let searchQuery = '';
 let activeListId = 'tasks';
 let videoContextMenu = null;
+let aiContextMenu = null;
 let aiSummaryType = 'daily';
 
 const defaultLists = [
@@ -680,15 +681,67 @@ function findAiSummary(type, periodKey) {
   return aiSummaries.find(summary => summary.type === type && summary.periodKey === periodKey) || null;
 }
 
+function closeAiContextMenu() {
+  if (aiContextMenu) {
+    aiContextMenu.remove();
+    aiContextMenu = null;
+  }
+}
+
+function openAiSummaryContextMenu(event, summary) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeAiContextMenu();
+  closeVideoContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'video-context-menu ai-context-menu';
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.textContent = '删除总结';
+  del.addEventListener('click', () => {
+    closeAiContextMenu();
+    if (!confirm('确定删除这条 AI 总结吗？')) return;
+    aiSummaries = aiSummaries.filter(item => item.id !== summary.id);
+    saveAiData();
+    renderAiHistory();
+    updateAiSummaryMode();
+    setAiStatus('已删除总结', 'ok');
+  });
+  menu.appendChild(del);
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+  const y = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+  menu.style.left = Math.max(8, x) + 'px';
+  menu.style.top = Math.max(8, y) + 'px';
+  aiContextMenu = menu;
+}
+
 function setAiStatus(message, state) {
   if (!aiSummaryStatus) return;
   aiSummaryStatus.textContent = message || '';
   aiSummaryStatus.className = 'ai-status' + (state ? ' ' + state : '');
 }
 
+function cleanAiText(text) {
+  return String(text || '')
+    .replace(/```(?:json|markdown|md)?/gi, '')
+    .replace(/```/g, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_([^_\n]+)_/g, '$1')
+    .replace(/\*/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^[\s>*-]+/gm, '')
+    .trim();
+}
+
 function appendAiText(parent, text) {
   const node = document.createElement('p');
-  node.textContent = String(text || '').trim() || '暂无内容。';
+  node.textContent = cleanAiText(text) || '暂无内容。';
   parent.appendChild(node);
 }
 
@@ -696,9 +749,9 @@ function normalizeAiCard(card) {
   if (typeof card === 'string') return { summary: card, bullets: [] };
   card = card || {};
   return {
-    summary: String(card.summary || '').trim(),
+    summary: cleanAiText(card.summary),
     bullets: Array.isArray(card.bullets)
-      ? card.bullets.map(item => String(item || '').trim()).filter(Boolean).slice(0, 6)
+      ? card.bullets.map(cleanAiText).filter(Boolean).slice(0, 6)
       : [],
   };
 }
@@ -802,7 +855,7 @@ function renderAiCard(title, card, tone) {
     listEl.className = 'ai-card-list';
     card.bullets.forEach(item => {
       const li = document.createElement('li');
-      li.textContent = item;
+      li.textContent = cleanAiText(item);
       listEl.appendChild(li);
     });
     section.appendChild(listEl);
@@ -852,6 +905,7 @@ function renderAiHistory() {
     btn.type = 'button';
     btn.className = 'ai-history-item';
     btn.innerHTML = `<strong>${summary.title}</strong><span>${summary.type === 'weekly' ? '周总结' : '日总结'} · ${summary.periodKey}</span>`;
+    btn.addEventListener('contextmenu', (event) => openAiSummaryContextMenu(event, summary));
     btn.addEventListener('click', () => {
       aiSummaryType = summary.type;
       if (aiSummaryDate) {
@@ -899,6 +953,7 @@ function buildDeepSeekPrompt(inputData) {
     '只返回合法 JSON，不要 Markdown，不要代码块，不要额外解释。',
     'JSON 字段必须严格为：{"overview":{"summary":"","bullets":[]},"highlights":{"summary":"","bullets":[]},"problems":{"summary":"","bullets":[]},"nextSteps":{"summary":"","bullets":[]}}。',
     '四个字段分别对应“完成概况 / 亮点 / 问题 / 下一步建议”。summary 用一句具体评价，bullets 放 2 到 4 条要点。',
+    'summary 和 bullets 里的文字都不要使用 **加粗**、*斜体*、反引号、标题符号或任何 Markdown 标记。',
     '要求：简洁、具体、有判断；不要空泛鸡汤，要引用真实任务名称。',
     '如果完成时间未知，只说明旧完成项无法归入本周期，不要把它们算作本周期成果。',
     '',
@@ -2000,9 +2055,16 @@ function openVideoContextMenu(event, collection, video) {
 }
 
 document.addEventListener('click', closeVideoContextMenu);
-document.addEventListener('contextmenu', closeVideoContextMenu);
+document.addEventListener('click', closeAiContextMenu);
+document.addEventListener('contextmenu', () => {
+  closeVideoContextMenu();
+  closeAiContextMenu();
+});
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') closeVideoContextMenu();
+  if (event.key === 'Escape') {
+    closeVideoContextMenu();
+    closeAiContextMenu();
+  }
 });
 
 function renderVideo() {
