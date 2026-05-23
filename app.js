@@ -125,6 +125,7 @@ const syncStatus = document.getElementById('syncStatus');
 
 let searchQuery = '';
 let activeListId = 'tasks';
+let videoContextMenu = null;
 
 const defaultLists = [
   { id: 'myday', name: '我的一天', icon: 'sun' },
@@ -1397,6 +1398,48 @@ function updateVideoProgress(video, value) {
   renderSidebar();
 }
 
+function closeVideoContextMenu() {
+  if (videoContextMenu) {
+    videoContextMenu.remove();
+    videoContextMenu = null;
+  }
+}
+
+function openVideoContextMenu(event, collection, video) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeVideoContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'video-context-menu';
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.textContent = '删除视频';
+  del.addEventListener('click', () => {
+    closeVideoContextMenu();
+    if (!confirm('确定删除这个视频吗？')) return;
+    collection.videos = collection.videos.filter(item => item.id !== video.id);
+    saveVideoCollections();
+    renderVideoCollectionGrid();
+    renderSidebar();
+  });
+  menu.appendChild(del);
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+  const y = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+  menu.style.left = Math.max(8, x) + 'px';
+  menu.style.top = Math.max(8, y) + 'px';
+  videoContextMenu = menu;
+}
+
+document.addEventListener('click', closeVideoContextMenu);
+document.addEventListener('contextmenu', closeVideoContextMenu);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeVideoContextMenu();
+});
+
 function renderVideo() {
   list.innerHTML = '';
   clearDoneBtn.style.display = 'none';
@@ -1618,6 +1661,7 @@ function renderVideoCollectionGrid() {
   activeCollection.videos.forEach(video => {
     const card = document.createElement('article');
     card.className = 'video-tile' + (video.done ? ' done' : '');
+    card.addEventListener('contextmenu', (event) => openVideoContextMenu(event, activeCollection, video));
     const coverLink = document.createElement('a');
     coverLink.className = 'video-cover';
     coverLink.href = video.url;

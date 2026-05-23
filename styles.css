@@ -1656,6 +1656,36 @@ body {
   accent-color: var(--accent);
 }
 
+.video-context-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 136px;
+  padding: 6px;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: rgba(var(--card-rgb), 0.96);
+  backdrop-filter: blur(var(--card-blur));
+  box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+}
+
+.video-context-menu button {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.video-context-menu button:hover {
+  background: var(--bg-btn-hover);
+}
+
 @media (max-width: 760px) {
   .video-toolbar {
     align-items: stretch;
