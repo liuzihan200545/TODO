@@ -500,6 +500,20 @@ function toDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function toLocalDateKeyFromIso(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return String(iso).slice(0, 10);
+  return toDateKey(date);
+}
+
+function formatLocalTimeFromIso(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
 function getWeekDates(baseDate) {
   const base = new Date(baseDate || new Date());
   base.setHours(0, 0, 0, 0);
@@ -537,8 +551,16 @@ function formatAiPeriod(type, dateKey) {
 
 function isIsoDateInRange(iso, startKey, endKey) {
   if (!iso) return false;
-  const key = String(iso).slice(0, 10);
+  const key = toLocalDateKeyFromIso(iso);
   return key >= startKey && key <= endKey;
+}
+
+function buildCompletedTimeFields(completedAt) {
+  return {
+    completedAt,
+    completedLocalDate: toLocalDateKeyFromIso(completedAt),
+    completedLocalTime: formatLocalTimeFromIso(completedAt),
+  };
 }
 
 function getAiPeriodInfo(type, dateKey) {
@@ -578,7 +600,7 @@ function getCompletedTodoEntries(period) {
         entries.push({
           text: todo.text,
           list: listItem.name,
-          completedAt: todo.completedAt,
+          ...buildCompletedTimeFields(todo.completedAt),
         });
       }
     });
@@ -612,7 +634,7 @@ function getCompletedRoadmapEntries(period) {
         return;
       }
       if (isIsoDateInRange(item.completedAt, period.startKey, period.endKey)) {
-        entries.push({ text: item.text, project: project.title, completedAt: item.completedAt });
+        entries.push({ text: item.text, project: project.title, ...buildCompletedTimeFields(item.completedAt) });
       }
     });
   });
@@ -630,7 +652,7 @@ function getVideoSummaryEntries(period) {
         if (!video.completedAt) {
           unknown += 1;
         } else if (isIsoDateInRange(video.completedAt, period.startKey, period.endKey)) {
-          completed.push({ title: video.title, collection: collection.name, completedAt: video.completedAt });
+          completed.push({ title: video.title, collection: collection.name, ...buildCompletedTimeFields(video.completedAt) });
         }
       } else if (video.progressPercent > 0) {
         inProgress += 1;
@@ -779,16 +801,61 @@ function normalizeAiCard(card) {
   };
 }
 
+function extractJsonObjectText(text) {
+  const raw = String(text || '');
+  const start = raw.indexOf('{');
+  if (start < 0) return '';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return raw.slice(start, index + 1);
+    }
+  }
+  return raw.slice(start).trim();
+}
+
+function parseJsonMaybeWrapped(text) {
+  const candidates = [];
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  candidates.push(raw);
+  const extracted = extractJsonObjectText(raw);
+  if (extracted && extracted !== raw) candidates.push(extracted);
+
+  for (const candidate of candidates) {
+    try {
+      let parsed = JSON.parse(candidate);
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (e) {}
+  }
+  return null;
+}
+
 function parseAiJsonContent(content) {
   const raw = String(content || '').trim();
   if (!raw) return null;
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const text = fenced ? fenced[1].trim() : raw;
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && typeof parsed === 'object') return parsed;
-  } catch (e) {}
-  return null;
+  return parseJsonMaybeWrapped(text) || parseJsonMaybeWrapped(raw);
 }
 
 function splitLegacyAiContent(content) {
