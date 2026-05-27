@@ -839,6 +839,12 @@ function parseJsonMaybeWrapped(text) {
   candidates.push(raw);
   const extracted = extractJsonObjectText(raw);
   if (extracted && extracted !== raw) candidates.push(extracted);
+  candidates.push(...candidates.map(candidate => candidate
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1')
+    .replace(/[\u0000-\u001f]+/g, ' ')
+  ));
 
   for (const candidate of candidates) {
     try {
@@ -850,12 +856,57 @@ function parseJsonMaybeWrapped(text) {
   return null;
 }
 
+function extractJsonLikeSection(raw, key) {
+  const text = String(raw || '');
+  const keyIndex = text.search(new RegExp("[\"']?" + key + "[\"']?\\s*:"));
+  if (keyIndex < 0) return null;
+  const braceStart = text.indexOf('{', keyIndex);
+  if (braceStart < 0) return null;
+  return extractJsonObjectText(text.slice(braceStart));
+}
+
+function decodeLooseJsonString(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    return JSON.parse('"' + raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
+  } catch (e) {
+    return raw;
+  }
+}
+
+function parseLooseBulletList(text) {
+  const raw = String(text || '');
+  const matches = raw.match(/"((?:\\.|[^"\\])*)"/g) || raw.match(/'((?:\\.|[^'\\])*)'/g) || [];
+  return matches
+    .map(item => decodeLooseJsonString(item.slice(1, -1)))
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function parseLooseAiJsonContent(content) {
+  const raw = extractJsonObjectText(content) || String(content || '');
+  const result = {};
+  ['overview', 'highlights', 'problems', 'nextSteps'].forEach(key => {
+    const section = extractJsonLikeSection(raw, key);
+    if (!section) return;
+    const summaryMatch = section.match(/["']summary["']\s*:\s*"((?:\\.|[^"\\])*)"/)
+      || section.match(/["']summary["']\s*:\s*'((?:\\.|[^'\\])*)'/);
+    const bulletsMatch = section.match(/["']bullets["']\s*:\s*\[([\s\S]*?)\]/);
+    result[key] = {
+      summary: summaryMatch ? decodeLooseJsonString(summaryMatch[1]) : '',
+      bullets: bulletsMatch ? parseLooseBulletList(bulletsMatch[1]) : [],
+    };
+  });
+  return Object.keys(result).length ? result : null;
+}
+
 function parseAiJsonContent(content) {
   const raw = String(content || '').trim();
   if (!raw) return null;
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const text = fenced ? fenced[1].trim() : raw;
-  return parseJsonMaybeWrapped(text) || parseJsonMaybeWrapped(raw);
+  return parseJsonMaybeWrapped(text) || parseJsonMaybeWrapped(raw) || parseLooseAiJsonContent(text) || parseLooseAiJsonContent(raw);
 }
 
 function splitLegacyAiContent(content) {
