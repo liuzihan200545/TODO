@@ -118,6 +118,7 @@ const syncEmail = document.getElementById('syncEmail');
 const syncPassword = document.getElementById('syncPassword');
 const syncLoginBtn = document.getElementById('syncLoginBtn');
 const syncSignupBtn = document.getElementById('syncSignupBtn');
+const syncResetBtn = document.getElementById('syncResetBtn');
 const syncUserEmail = document.getElementById('syncUserEmail');
 const manualSyncBtn = document.getElementById('manualSyncBtn');
 const syncLogoutBtn = document.getElementById('syncLogoutBtn');
@@ -3580,9 +3581,34 @@ function getErrorMessage(error, fallback) {
 }
 
 function setSyncBusy(isBusy) {
-  [syncLoginBtn, syncSignupBtn, manualSyncBtn, syncLogoutBtn].forEach(btn => {
+  [syncLoginBtn, syncSignupBtn, syncResetBtn, manualSyncBtn, syncLogoutBtn].forEach(btn => {
     if (btn) btn.disabled = isBusy;
   });
+}
+
+function getAuthErrorMessage(error, fallback) {
+  const message = String((error && error.message) || '').trim();
+  const normalized = message.toLowerCase();
+  if (normalized.includes('invalid login credentials')) {
+    return '邮箱或密码错误。忘记密码时可点击“忘记密码？”。';
+  }
+  if (normalized.includes('email not confirmed')) {
+    return '邮箱尚未确认，请先打开确认邮件中的链接。';
+  }
+  if (normalized.includes('user already registered')) {
+    return '该邮箱已经注册，请直接登录或重置密码。';
+  }
+  if (normalized.includes('password should be') || normalized.includes('weak password')) {
+    return '密码强度不足，请使用至少 6 位且更难猜的密码。';
+  }
+  return message || fallback;
+}
+
+function getAuthRedirectUrl() {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }
 
 function updateAuthUI() {
@@ -3846,7 +3872,7 @@ async function signUp() {
       setSyncStatus('注册成功，请检查邮箱确认后再登录', 'ok');
     }
   } catch (error) {
-    setSyncStatus(error.message || '注册失败', 'error');
+    setSyncStatus(getAuthErrorMessage(error, '注册失败'), 'error');
   } finally {
     setSyncBusy(false);
   }
@@ -3866,10 +3892,73 @@ async function signIn() {
     if (error) throw error;
     if (data.user && (!currentUser || currentUser.id !== data.user.id)) await handleSignedIn(data.user);
   } catch (error) {
-    setSyncStatus(error.message || '登录失败', 'error');
+    setSyncStatus(getAuthErrorMessage(error, '登录失败'), 'error');
   } finally {
     setSyncBusy(false);
   }
+}
+
+async function requestPasswordReset() {
+  if (!supabaseClient) return;
+  const email = syncEmail.value.trim();
+  if (!email) {
+    setSyncStatus('请先输入需要重置密码的邮箱。', 'error');
+    syncEmail.focus();
+    return;
+  }
+
+  setSyncBusy(true);
+  setSyncStatus('正在发送密码重置邮件...', '');
+  try {
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: getAuthRedirectUrl(),
+    });
+    if (error) throw error;
+    setSyncStatus('如果该邮箱已注册，密码重置邮件会很快发送，请检查收件箱和垃圾邮件。', 'ok');
+  } catch (error) {
+    setSyncStatus(getAuthErrorMessage(error, '密码重置邮件发送失败'), 'error');
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+let passwordRecoveryActive = false;
+
+function completePasswordRecovery(session) {
+  if (passwordRecoveryActive) return;
+  passwordRecoveryActive = true;
+
+  window.setTimeout(async () => {
+    const password = window.prompt('请输入新密码（至少 6 位）：');
+    if (!password) {
+      await supabaseClient.auth.signOut();
+      passwordRecoveryActive = false;
+      setSyncStatus('尚未设置新密码，可以重新打开邮件中的重置链接。', 'error');
+      return;
+    }
+    if (password.length < 6) {
+      await supabaseClient.auth.signOut();
+      passwordRecoveryActive = false;
+      setSyncStatus('新密码至少需要 6 位，请重新打开重置链接再试。', 'error');
+      return;
+    }
+
+    setSyncBusy(true);
+    setSyncStatus('正在更新密码...', '');
+    try {
+      const { error } = await supabaseClient.auth.updateUser({ password });
+      if (error) throw error;
+      setSyncStatus('密码已更新并登录。', 'ok');
+      if (session && session.user && (!currentUser || currentUser.id !== session.user.id)) {
+        await handleSignedIn(session.user);
+      }
+    } catch (error) {
+      setSyncStatus(getAuthErrorMessage(error, '密码更新失败'), 'error');
+    } finally {
+      passwordRecoveryActive = false;
+      setSyncBusy(false);
+    }
+  }, 0);
 }
 
 async function signOut() {
@@ -3918,6 +4007,7 @@ async function initSupabaseSync() {
 
   syncLoginBtn.addEventListener('click', signIn);
   syncSignupBtn.addEventListener('click', signUp);
+  syncResetBtn.addEventListener('click', requestPasswordReset);
   syncLogoutBtn.addEventListener('click', signOut);
   manualSyncBtn.addEventListener('click', manualSync);
   [syncEmail, syncPassword].forEach(el => {
@@ -3928,6 +4018,7 @@ async function initSupabaseSync() {
 
   supabaseClient.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') handleSignedOut();
+    if (event === 'PASSWORD_RECOVERY' && session) completePasswordRecovery(session);
     if (event === 'SIGNED_IN' && session && (!currentUser || currentUser.id !== session.user.id)) {
       handleSignedIn(session.user);
     }
