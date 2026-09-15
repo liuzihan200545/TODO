@@ -497,6 +497,18 @@ function getMyDayVideoSuggestions() {
   return entries;
 }
 
+function setVideoMyDay(collectionId, videoId, dateKey) {
+  const collection = videoCollections.find(item => item.id === collectionId);
+  if (!collection) return false;
+  const video = (collection.videos || []).find(item => item.id === videoId);
+  if (!video) return false;
+
+  video.myDay = dateKey || null;
+  video.updatedAt = new Date().toISOString();
+  saveVideoCollections();
+  return true;
+}
+
 function toDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
@@ -2785,6 +2797,7 @@ function render() {
         const actions = document.createElement('div');
         actions.className = 'actions myday-video-actions';
         const doneBtn = document.createElement('button');
+        doneBtn.type = 'button';
         doneBtn.className = 'myday-video-check';
         doneBtn.title = entry.video.done ? '标记为未完成' : '标记为已完成';
         doneBtn.setAttribute('aria-label', doneBtn.title);
@@ -2793,14 +2806,15 @@ function render() {
           updateVideoProgress(entry.video, entry.video.done ? 0 : 100, render);
         });
         const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
         removeBtn.className = 'myday-btn active';
         removeBtn.textContent = '☀️';
         removeBtn.title = '从“我的一天”移除';
         removeBtn.setAttribute('aria-label', removeBtn.title);
         removeBtn.addEventListener('click', (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          entry.video.myDay = null;
-          saveVideoCollections();
+          if (!setVideoMyDay(entry.collection.id, entry.video.id, null)) return;
           render();
           renderSidebar();
         });
@@ -2825,6 +2839,7 @@ function render() {
         item.className = 'suggest-item';
         item.innerHTML = `<span class="suggest-text">${s.task.text}<span class="suggest-source">${s.listName}</span></span>`;
         const addBtn = document.createElement('button');
+        addBtn.type = 'button';
         addBtn.className = 'add-to-myday';
         addBtn.textContent = '+';
         addBtn.title = '添加到"我的一天"';
@@ -2847,13 +2862,14 @@ function render() {
         source.textContent = `${s.collection.name} · 视频学习`;
         text.appendChild(source);
         const addBtn = document.createElement('button');
+        addBtn.type = 'button';
         addBtn.className = 'add-to-myday';
         addBtn.textContent = '+';
         addBtn.title = '添加到“我的一天”';
         addBtn.addEventListener('click', (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          s.video.myDay = todayStr();
-          saveVideoCollections();
+          if (!setVideoMyDay(s.collection.id, s.video.id, todayStr())) return;
           render();
           renderSidebar();
         });
