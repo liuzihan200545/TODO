@@ -12,6 +12,130 @@ var suppressSync = false;
 var supabaseClient = null;
 var appBootstrapped = false;
 
+const PDF_DB_NAME = 'todo-roadmap-local-files';
+const PDF_DB_VERSION = 1;
+const PDF_STORE_NAME = 'pdfDocuments';
+const PDF_JS_VERSION = '6.3.289';
+let pdfDbPromise = null;
+let pdfJsPromise = null;
+const pdfObjectUrls = new Map();
+
+function openPdfDatabase() {
+  if (!('indexedDB' in window)) return Promise.reject(new Error('当前浏览器不支持本地 PDF 存储'));
+  if (pdfDbPromise) return pdfDbPromise;
+  pdfDbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(PDF_DB_NAME, PDF_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(PDF_STORE_NAME)) {
+        const store = database.createObjectStore(PDF_STORE_NAME, { keyPath: 'id' });
+        store.createIndex('projectId', 'projectId', { unique: false });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => {
+      pdfDbPromise = null;
+      reject(request.error || new Error('无法打开本地 PDF 存储'));
+    };
+    request.onblocked = () => {
+      pdfDbPromise = null;
+      reject(new Error('本地 PDF 存储正在被其他页面占用，请关闭其他页面后重试'));
+    };
+  });
+  return pdfDbPromise;
+}
+
+async function runPdfStore(mode, operation) {
+  const database = await openPdfDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(PDF_STORE_NAME, mode);
+    const store = transaction.objectStore(PDF_STORE_NAME);
+    let result;
+    try {
+      result = operation(store);
+    } catch (error) {
+      transaction.abort();
+      reject(error);
+      return;
+    }
+    transaction.oncomplete = () => resolve(result);
+    transaction.onerror = () => reject(transaction.error || new Error('本地 PDF 操作失败'));
+    transaction.onabort = () => reject(transaction.error || new Error('本地 PDF 操作已取消'));
+  });
+}
+
+function listLocalPdfs(projectId) {
+  return openPdfDatabase().then(database => new Promise((resolve, reject) => {
+    const transaction = database.transaction(PDF_STORE_NAME, 'readonly');
+    const request = transaction.objectStore(PDF_STORE_NAME).index('projectId').getAll(projectId);
+    request.onsuccess = () => {
+      const documents = Array.isArray(request.result) ? request.result : [];
+      documents.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      resolve(documents);
+    };
+    request.onerror = () => reject(request.error || new Error('无法读取本地 PDF'));
+  }));
+}
+
+function listAllLocalPdfs() {
+  return openPdfDatabase().then(database => new Promise((resolve, reject) => {
+    const request = database.transaction(PDF_STORE_NAME, 'readonly').objectStore(PDF_STORE_NAME).getAll();
+    request.onsuccess = () => {
+      const documents = Array.isArray(request.result) ? request.result : [];
+      documents.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      resolve(documents);
+    };
+    request.onerror = () => reject(request.error || new Error('无法读取本地 PDF'));
+  }));
+}
+
+function getLocalPdf(documentId) {
+  return openPdfDatabase().then(database => new Promise((resolve, reject) => {
+    const request = database.transaction(PDF_STORE_NAME, 'readonly').objectStore(PDF_STORE_NAME).get(documentId);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('无法读取 PDF 文件'));
+  }));
+}
+
+function saveLocalPdf(document) {
+  return runPdfStore('readwrite', store => store.put(document));
+}
+
+function revokePdfObjectUrls(documentId) {
+  [`pdf:${documentId}`, `thumb:${documentId}`].forEach(key => {
+    const url = pdfObjectUrls.get(key);
+    if (url) URL.revokeObjectURL(url);
+    pdfObjectUrls.delete(key);
+  });
+}
+
+function deleteLocalPdf(documentId) {
+  revokePdfObjectUrls(documentId);
+  return runPdfStore('readwrite', store => store.delete(documentId));
+}
+
+async function deleteLocalPdfsForProject(projectId) {
+  const documents = await listLocalPdfs(projectId);
+  documents.forEach(document => revokePdfObjectUrls(document.id));
+  if (!documents.length) return;
+  await runPdfStore('readwrite', store => {
+    documents.forEach(document => store.delete(document.id));
+  });
+}
+
+function getPdfObjectUrl(key, blob) {
+  if (!blob) return '';
+  if (pdfObjectUrls.has(key)) return pdfObjectUrls.get(key);
+  const url = URL.createObjectURL(blob);
+  pdfObjectUrls.set(key, url);
+  return url;
+}
+
+window.addEventListener('beforeunload', () => {
+  pdfObjectUrls.forEach(url => URL.revokeObjectURL(url));
+  pdfObjectUrls.clear();
+});
+
 function getTheme() {
   const saved = localStorage.getItem('theme');
   if (saved) return saved;
@@ -1653,6 +1777,7 @@ function renderSidebar() {
   renderVideoProjects();
   renderVideoCollections();
   renderCalendarProjects();
+  updateLocalPdfSidebarCounts();
 
   // render custom lists
   const custom = lists.filter(l => !defaultLists.find(d => d.id === l.id));
@@ -1862,6 +1987,7 @@ function renderCalendarProjects() {
       if (!confirm('确定删除这个日历打卡项目吗？')) return;
       calendarProjects = calendarProjects.filter(project => project.id !== id);
       saveCalendarProjects();
+      deleteLocalPdfsForProject(id).catch(error => console.warn('Failed to delete local PDFs:', error));
       if (activeListId === 'calendar:' + id) {
         const next = calendarProjects[0] ? 'calendar:' + calendarProjects[0].id : 'calendar';
         switchToList(next);
@@ -2807,6 +2933,437 @@ function renderReadingShelf(project) {
   return section;
 }
 
+function loadPdfJs() {
+  if (!pdfJsPromise) {
+    const moduleUrl = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDF_JS_VERSION}/build/pdf.mjs`;
+    pdfJsPromise = import(moduleUrl).then(pdfjs => {
+      pdfjs.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDF_JS_VERSION}/build/pdf.worker.mjs`;
+      return pdfjs;
+    }).catch(error => {
+      pdfJsPromise = null;
+      throw error;
+    });
+  }
+  return pdfJsPromise;
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+}
+
+async function createPdfThumbnail(file) {
+  const pdfjs = await loadPdfJs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
+  let pdf;
+  try {
+    pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const cssWidth = 220;
+    const scale = cssWidth / Math.max(1, baseViewport.width);
+    const viewport = page.getViewport({ scale });
+    const outputScale = Math.min(2, window.devicePixelRatio || 1);
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    canvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
+    canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({
+      canvasContext: context,
+      viewport,
+      transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
+    }).promise;
+    const thumbnailBlob = await canvasToBlob(canvas, 'image/webp', 0.82)
+      || await canvasToBlob(canvas, 'image/jpeg', 0.85);
+    page.cleanup();
+    return { pageCount: pdf.numPages || 0, thumbnailBlob };
+  } finally {
+    if (pdf && typeof pdf.destroy === 'function') await pdf.destroy();
+    else if (loadingTask && typeof loadingTask.destroy === 'function') await loadingTask.destroy();
+  }
+}
+
+async function ensurePdfStorageSpace(fileSize) {
+  if (!navigator.storage || typeof navigator.storage.estimate !== 'function') return;
+  const estimate = await navigator.storage.estimate();
+  if (!Number.isFinite(estimate.quota) || !Number.isFinite(estimate.usage)) return;
+  const required = Math.ceil(fileSize * 1.12) + 1024 * 1024;
+  if (estimate.usage + required > estimate.quota) {
+    throw new Error('浏览器本地空间不足，无法保存这个 PDF');
+  }
+}
+
+function createLocalPdfRecord(projectId, file, preview) {
+  const nowIso = new Date().toISOString();
+  return {
+    id: 'local_pdf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9),
+    projectId,
+    title: file.name.replace(/\.pdf$/i, '') || '未命名 PDF',
+    fileName: file.name,
+    mimeType: 'application/pdf',
+    size: file.size,
+    pageCount: preview.pageCount || 0,
+    createdAt: nowIso,
+    done: false,
+    completedAt: null,
+    important: false,
+    myDay: null,
+    dueDate: null,
+    blob: file,
+    thumbnailBlob: preview.thumbnailBlob || null,
+  };
+}
+
+async function importLocalPdfs(project, files) {
+  const validFiles = files.filter(file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+  if (!validFiles.length) {
+    alert('请选择 PDF 文件。');
+    return;
+  }
+
+  const existing = await listLocalPdfs(project.id);
+  let added = 0;
+  let skipped = files.length - validFiles.length;
+  const failures = [];
+  for (const file of validFiles) {
+    if (existing.some(document => document.fileName === file.name && document.size === file.size)) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      await ensurePdfStorageSpace(file.size);
+      let preview = { pageCount: 0, thumbnailBlob: null };
+      try {
+        preview = await createPdfThumbnail(file);
+      } catch (error) {
+        console.warn('PDF preview generation failed:', file.name, error);
+      }
+      await saveLocalPdf(createLocalPdfRecord(project.id, file, preview));
+      added += 1;
+    } catch (error) {
+      failures.push(`${file.name}：${error && error.message ? error.message : '保存失败'}`);
+    }
+  }
+
+  if (navigator.storage && typeof navigator.storage.persist === 'function') {
+    navigator.storage.persist().catch(() => {});
+  }
+  renderMonthCalendar();
+  renderSidebar();
+  if (failures.length || skipped) {
+    const parts = [];
+    if (added) parts.push(`已添加 ${added} 个 PDF`);
+    if (skipped) parts.push(`跳过 ${skipped} 个非 PDF 或重复文件`);
+    if (failures.length) parts.push(failures.join('\n'));
+    alert(parts.join('\n'));
+  }
+}
+
+function selectLocalPdfs(project) {
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.pdf,application/pdf';
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  fileInput.addEventListener('change', () => {
+    const files = Array.from(fileInput.files || []);
+    fileInput.remove();
+    if (files.length) importLocalPdfs(project, files).catch(error => alert(error.message || 'PDF 添加失败'));
+  }, { once: true });
+  document.body.appendChild(fileInput);
+  fileInput.click();
+}
+
+function formatFileSize(bytes) {
+  const size = Math.max(0, Number(bytes) || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1024 / 1024).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function formatLocalPdfDate(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+async function openLocalPdf(documentId) {
+  const tab = window.open('about:blank', '_blank');
+  if (!tab) {
+    alert('浏览器阻止了新标签页，请允许此网站打开弹窗后重试。');
+    return;
+  }
+  try {
+    const document = await getLocalPdf(documentId);
+    if (!document || !document.blob) throw new Error('本机 PDF 文件不存在');
+    const url = getPdfObjectUrl(`pdf:${document.id}`, document.blob);
+    tab.opener = null;
+    tab.location.replace(url);
+  } catch (error) {
+    tab.close();
+    alert(error.message || '无法打开 PDF');
+  }
+}
+
+async function removeLocalPdf(pdfDocument) {
+  if (!confirm(`确定删除“${pdfDocument.fileName}”吗？此操作只影响当前设备。`)) return;
+  try {
+    await deleteLocalPdf(pdfDocument.id);
+    render();
+    renderSidebar();
+  } catch (error) {
+    alert(error.message || '删除 PDF 失败');
+  }
+}
+
+async function toggleLocalPdfDone(pdfDocument) {
+  const wasDone = Boolean(pdfDocument.done);
+  const updatedDocument = {
+    ...pdfDocument,
+    done: !wasDone,
+    completedAt: wasDone ? null : new Date().toISOString(),
+  };
+  try {
+    await saveLocalPdf(updatedDocument);
+    if (!wasDone) ding();
+    render();
+    renderSidebar();
+  } catch (error) {
+    alert(error.message || '无法更新 PDF 代办状态');
+  }
+}
+
+async function updateLocalPdfFields(pdfDocument, fields) {
+  const updatedDocument = { ...pdfDocument, ...fields, updatedAt: new Date().toISOString() };
+  try {
+    await saveLocalPdf(updatedDocument);
+    render();
+    renderSidebar();
+  } catch (error) {
+    alert(error.message || '无法更新 PDF 代办');
+  }
+}
+
+function pickLocalPdfDate(pdfDocument) {
+  const picker = document.createElement('input');
+  picker.type = 'date';
+  picker.value = pdfDocument.dueDate || '';
+  picker.className = 'local-pdf-date-picker';
+  picker.addEventListener('change', () => {
+    updateLocalPdfFields(pdfDocument, { dueDate: picker.value || null });
+    picker.remove();
+  }, { once: true });
+  picker.addEventListener('blur', () => setTimeout(() => picker.remove(), 200), { once: true });
+  document.body.appendChild(picker);
+  picker.showPicker ? picker.showPicker() : picker.click();
+}
+
+function createLocalPdfCard(pdfDocument) {
+  const card = document.createElement('article');
+  card.className = 'local-pdf-card' + (pdfDocument.done ? ' done' : '');
+
+  const cover = document.createElement('button');
+  cover.type = 'button';
+  cover.className = 'local-pdf-cover';
+  cover.title = `打开 ${pdfDocument.fileName}`;
+  cover.addEventListener('click', () => openLocalPdf(pdfDocument.id));
+  if (pdfDocument.thumbnailBlob) {
+    const image = document.createElement('img');
+    image.src = getPdfObjectUrl(`thumb:${pdfDocument.id}`, pdfDocument.thumbnailBlob);
+    image.alt = `${pdfDocument.title} 第一页`;
+    cover.appendChild(image);
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'local-pdf-placeholder';
+    placeholder.innerHTML = '<strong>PDF</strong><span>本地文档</span>';
+    cover.appendChild(placeholder);
+  }
+
+  const body = document.createElement('div');
+  body.className = 'local-pdf-body';
+  const titleRow = document.createElement('div');
+  titleRow.className = 'local-pdf-title-row';
+  const check = document.createElement('button');
+  check.type = 'button';
+  check.className = 'local-pdf-check';
+  check.setAttribute('aria-label', pdfDocument.done ? `将 ${pdfDocument.title} 标记为未完成` : `完成 ${pdfDocument.title}`);
+  check.title = pdfDocument.done ? '标记为未完成' : '标记为完成';
+  check.addEventListener('click', () => toggleLocalPdfDone(pdfDocument));
+  const title = document.createElement('button');
+  title.type = 'button';
+  title.className = 'local-pdf-title';
+  title.textContent = pdfDocument.title;
+  title.title = pdfDocument.fileName;
+  title.addEventListener('click', () => openLocalPdf(pdfDocument.id));
+  const meta = document.createElement('span');
+  meta.className = 'local-pdf-meta';
+  const pageText = pdfDocument.pageCount ? `${pdfDocument.pageCount} 页 · ` : '';
+  meta.textContent = `${pageText}${formatFileSize(pdfDocument.size)} · ${formatLocalPdfDate(pdfDocument.createdAt)}`;
+  const localBadge = document.createElement('span');
+  localBadge.className = 'local-pdf-badge';
+  const sourceProject = calendarProjects.find(project => project.id === pdfDocument.projectId);
+  const sourceText = sourceProject ? `${sourceProject.name} · ` : '';
+  const dueText = pdfDocument.dueDate ? ` · ${formatDate(pdfDocument.dueDate)}` : '';
+  localBadge.textContent = pdfDocument.done
+    ? `${sourceText}已完成 · ${formatLocalPdfDate(pdfDocument.completedAt)}${dueText}`
+    : `${sourceText}待完成${dueText} · 仅保存在此设备`;
+  const actions = document.createElement('div');
+  actions.className = 'local-pdf-actions';
+  const importantButton = document.createElement('button');
+  importantButton.type = 'button';
+  importantButton.className = 'local-pdf-icon-action' + (pdfDocument.important ? ' active' : '');
+  importantButton.textContent = pdfDocument.important ? '★' : '☆';
+  importantButton.title = pdfDocument.important ? '从“重要”移除' : '添加到“重要”';
+  importantButton.setAttribute('aria-label', importantButton.title);
+  importantButton.addEventListener('click', () => updateLocalPdfFields(pdfDocument, { important: !pdfDocument.important }));
+  const dateButton = document.createElement('button');
+  dateButton.type = 'button';
+  dateButton.className = 'local-pdf-icon-action' + (pdfDocument.dueDate ? ' active' : '');
+  dateButton.textContent = '📅';
+  dateButton.title = pdfDocument.dueDate ? `计划日期：${formatDate(pdfDocument.dueDate)}` : '添加到“计划内”';
+  dateButton.setAttribute('aria-label', dateButton.title);
+  dateButton.addEventListener('click', () => pickLocalPdfDate(pdfDocument));
+  const myDayButton = document.createElement('button');
+  myDayButton.type = 'button';
+  const inMyDay = pdfDocument.myDay === todayStr();
+  myDayButton.className = 'local-pdf-icon-action local-pdf-myday' + (inMyDay ? ' active' : '');
+  myDayButton.textContent = '☀️';
+  myDayButton.title = inMyDay ? '从“我的一天”移除' : '添加到“我的一天”';
+  myDayButton.setAttribute('aria-label', myDayButton.title);
+  myDayButton.addEventListener('click', () => updateLocalPdfFields(pdfDocument, { myDay: inMyDay ? null : todayStr() }));
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.textContent = '打开';
+  openButton.addEventListener('click', () => openLocalPdf(pdfDocument.id));
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'local-pdf-delete';
+  deleteButton.textContent = '删除';
+  deleteButton.addEventListener('click', () => removeLocalPdf(pdfDocument));
+  actions.appendChild(importantButton);
+  actions.appendChild(dateButton);
+  actions.appendChild(myDayButton);
+  actions.appendChild(openButton);
+  actions.appendChild(deleteButton);
+  titleRow.appendChild(check);
+  titleRow.appendChild(title);
+  body.appendChild(titleRow);
+  body.appendChild(meta);
+  body.appendChild(localBadge);
+  body.appendChild(actions);
+  card.appendChild(cover);
+  card.appendChild(body);
+  return card;
+}
+
+function renderLocalPdfLibrary(project) {
+  const section = document.createElement('section');
+  section.className = 'local-pdf-library';
+  section.dataset.projectId = project.id;
+  const header = document.createElement('div');
+  header.className = 'local-pdf-header';
+  const heading = document.createElement('div');
+  heading.innerHTML = '<strong>PDF 资料</strong><span>仅保存在当前浏览器</span>';
+  const summary = heading.querySelector('span');
+  const addButton = document.createElement('button');
+  addButton.type = 'button';
+  addButton.className = 'local-pdf-add';
+  addButton.textContent = '+ 添加 PDF';
+  addButton.addEventListener('click', () => selectLocalPdfs(project));
+  header.appendChild(heading);
+  header.appendChild(addButton);
+  section.appendChild(header);
+
+  const grid = document.createElement('div');
+  grid.className = 'local-pdf-grid';
+  grid.innerHTML = '<div class="local-pdf-loading">正在读取本机资料...</div>';
+  section.appendChild(grid);
+
+  listLocalPdfs(project.id).then(documents => {
+    if (!section.isConnected || section.dataset.projectId !== project.id) return;
+    grid.innerHTML = '';
+    const completedCount = documents.filter(pdfDocument => pdfDocument.done).length;
+    summary.textContent = documents.length
+      ? `${completedCount}/${documents.length} 已完成 · 仅保存在当前浏览器`
+      : '仅保存在当前浏览器';
+    if (!documents.length) {
+      grid.innerHTML = '<div class="local-pdf-empty">还没有 PDF 资料</div>';
+      return;
+    }
+    documents.forEach(pdfDocument => grid.appendChild(createLocalPdfCard(pdfDocument)));
+  }).catch(error => {
+    if (!section.isConnected) return;
+    grid.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'local-pdf-empty error';
+    message.textContent = error.message || '无法读取本机 PDF';
+    grid.appendChild(message);
+  });
+  return section;
+}
+
+function getLocalPdfsForList(documents, listId) {
+  if (listId === 'tasks') return documents;
+  if (listId === 'myday') return documents.filter(pdfDocument => pdfDocument.myDay === todayStr());
+  if (listId === 'important') return documents.filter(pdfDocument => pdfDocument.important);
+  if (listId === 'planned') return documents.filter(pdfDocument => pdfDocument.dueDate);
+  return [];
+}
+
+function updateLocalPdfSidebarCounts(documents) {
+  const applyCounts = localDocuments => {
+    document.querySelectorAll('.sidebar .nav li').forEach(li => {
+      const id = li.dataset.listId;
+      if (!['myday', 'important', 'planned', 'tasks'].includes(id)) return;
+      const count = li.querySelector('.count');
+      if (!count) return;
+      const baseTodos = id === 'tasks'
+        ? ((lists.find(item => item.id === 'tasks') || { todos: [] }).todos || [])
+        : getSmartListTodos(id);
+      const todoCount = baseTodos.filter(todo => !todo.done).length;
+      const videoCount = id === 'myday' ? getMyDayVideoEntries().filter(entry => !entry.video.done).length : 0;
+      const pdfCount = getLocalPdfsForList(localDocuments, id).filter(pdfDocument => !pdfDocument.done).length;
+      count.textContent = todoCount + videoCount + pdfCount || '';
+    });
+  };
+  if (Array.isArray(documents)) applyCounts(documents);
+  else listAllLocalPdfs().then(applyCounts).catch(() => {});
+}
+
+function renderLocalPdfTaskSection(listId, query) {
+  if (!['myday', 'important', 'planned', 'tasks'].includes(listId)) return;
+  const requestedListId = listId;
+  listAllLocalPdfs().then(documents => {
+    if (activeListId !== requestedListId) return;
+    updateLocalPdfSidebarCounts(documents);
+    let visibleDocuments = getLocalPdfsForList(documents, requestedListId);
+    if (query) visibleDocuments = visibleDocuments.filter(pdfDocument => String(pdfDocument.title || '').toLowerCase().includes(query));
+    if (!visibleDocuments.length) return;
+
+    const existingEmpty = list.querySelector('.empty-state');
+    if (existingEmpty && !list.querySelector('li, .suggestions')) existingEmpty.remove();
+    const section = document.createElement('section');
+    section.className = 'smart-pdf-section';
+    const heading = document.createElement('div');
+    heading.className = 'smart-pdf-heading';
+    const openCount = visibleDocuments.filter(pdfDocument => !pdfDocument.done).length;
+    heading.innerHTML = `<strong>PDF 代办</strong><span>${openCount} 项待完成 · 仅此设备</span>`;
+    const grid = document.createElement('div');
+    grid.className = 'local-pdf-grid';
+    visibleDocuments.forEach(pdfDocument => grid.appendChild(createLocalPdfCard(pdfDocument)));
+    section.appendChild(heading);
+    section.appendChild(grid);
+    list.appendChild(section);
+
+    const todoOpenCount = getTodos().filter(todo => !todo.done).length;
+    const videoOpenCount = requestedListId === 'myday' ? getMyDayVideoEntries().filter(entry => !entry.video.done).length : 0;
+    const activeCount = todoOpenCount + videoOpenCount + openCount;
+    countEl.textContent = activeCount === 0 ? '全部完成 ✓' : `${activeCount} 项待完成`;
+  }).catch(error => console.warn('Failed to render PDF tasks:', error));
+}
+
 function renderCalendar() {
   list.innerHTML = '';
   clearDoneBtn.style.display = 'none';
@@ -2945,6 +3502,7 @@ function renderMonthCalendar() {
 
   if (activeProject && isReadingCalendarProject(activeProject)) {
     view.appendChild(renderReadingShelf(activeProject));
+    view.appendChild(renderLocalPdfLibrary(activeProject));
   }
 
   const grid = document.createElement('div');
@@ -3319,6 +3877,7 @@ function render() {
   const activeCount = todos.filter(t => !t.done).length
     + (activeListId === 'myday' ? getMyDayVideoEntries().filter(entry => !entry.video.done).length : 0);
   countEl.textContent = activeCount === 0 ? '全部完成 ✓' : `${activeCount} 项待完成`;
+  renderLocalPdfTaskSection(activeListId, searchQuery);
 }
 
 function saveAndRender() {

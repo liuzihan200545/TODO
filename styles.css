@@ -2591,6 +2591,296 @@ body {
   text-align: center;
 }
 
+.local-pdf-library {
+  margin: 0 0 22px;
+  padding: 0 0 22px;
+  border-bottom: 1px solid var(--border-divider);
+}
+
+.local-pdf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.local-pdf-header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.local-pdf-header strong {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.local-pdf-header span {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.local-pdf-add,
+.local-pdf-actions button {
+  border: 1px solid var(--border-divider);
+  border-radius: 6px;
+  background: rgba(var(--card-rgb), calc(var(--card-opacity) * 0.78));
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.local-pdf-add {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.local-pdf-add:hover,
+.local-pdf-actions button:hover {
+  border-color: var(--accent);
+  background: var(--bg-btn-hover);
+  color: var(--accent);
+}
+
+.local-pdf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.local-pdf-card {
+  display: grid;
+  grid-template-columns: 102px minmax(0, 1fr);
+  min-height: 138px;
+  overflow: hidden;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+
+.local-pdf-cover {
+  width: 102px;
+  height: 138px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid var(--border-divider);
+  background: #303030;
+  cursor: pointer;
+}
+
+.local-pdf-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.local-pdf-placeholder {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background: #2d2d2d;
+  color: #f4f4f4;
+}
+
+.local-pdf-placeholder strong {
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: #c74343;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.local-pdf-placeholder span {
+  color: #aaa;
+  font-size: 11px;
+}
+
+.local-pdf-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 11px;
+}
+
+.local-pdf-title-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.local-pdf-check {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  padding: 0;
+  border: 2px solid var(--text-tertiary);
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.local-pdf-check:hover {
+  border-color: var(--accent);
+}
+
+.local-pdf-card.done .local-pdf-check {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.local-pdf-card.done .local-pdf-check::after {
+  position: absolute;
+  top: 3px;
+  left: 7px;
+  width: 5px;
+  height: 10px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.local-pdf-title {
+  display: -webkit-box;
+  width: 100%;
+  max-height: 42px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: left;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.local-pdf-card.done .local-pdf-title {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.local-pdf-card.done .local-pdf-cover img,
+.local-pdf-card.done .local-pdf-placeholder {
+  opacity: 0.58;
+}
+
+.local-pdf-title:hover {
+  color: var(--accent);
+}
+
+.local-pdf-meta {
+  margin-top: 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.local-pdf-badge {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.local-pdf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.local-pdf-actions button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.local-pdf-actions .local-pdf-delete:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.local-pdf-actions .local-pdf-icon-action {
+  width: 28px;
+  height: 27px;
+  padding: 0;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.local-pdf-actions .local-pdf-icon-action.active,
+.local-pdf-actions .local-pdf-myday.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.local-pdf-date-picker {
+  position: fixed;
+  z-index: 1200;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.smart-pdf-section {
+  width: 100%;
+  padding: 18px 20px 22px;
+  border-top: 1px solid var(--border-divider);
+}
+
+.smart-pdf-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.smart-pdf-heading strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.smart-pdf-heading span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.local-pdf-empty,
+.local-pdf-loading {
+  grid-column: 1 / -1;
+  min-height: 90px;
+  padding: 30px 16px;
+  border: 1px dashed var(--border-divider);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.local-pdf-empty.error {
+  color: var(--danger);
+}
+
 .month-calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(96px, 1fr));
@@ -2686,17 +2976,25 @@ body {
     grid-template-columns: 92px repeat(7, 52px);
   }
 
-  .reading-shelf-header {
+  .reading-shelf-header,
+  .local-pdf-header {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .book-add-btn {
+  .book-add-btn,
+  .local-pdf-add {
     width: 100%;
   }
 
-  .book-grid {
+  .book-grid,
+  .local-pdf-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .smart-pdf-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .month-calendar-grid {
