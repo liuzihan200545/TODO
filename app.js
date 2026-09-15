@@ -307,13 +307,55 @@ if (videoCollections.length && !localStorage.getItem('videoCollections')) {
   localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
 }
 
+function getDoubanBookId(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/douban\.com\/(?:book\/)?subject\/(\d+)/i);
+  return match ? match[1] : '';
+}
+
+function getDoubanBookUrl(subjectId) {
+  return `https://book.douban.com/subject/${encodeURIComponent(subjectId)}/`;
+}
+
+function normalizeBookCoverUrl(url) {
+  const text = String(url || '').trim();
+  if (!text) return '';
+  let httpsUrl = text.startsWith('//')
+    ? 'https:' + text
+    : (text.startsWith('http://') ? 'https://' + text.slice(7) : text);
+  httpsUrl = httpsUrl.replace('/view/subject/s/public/', '/view/subject/l/public/');
+  return httpsUrl;
+}
+
+function normalizeCalendarBook(book) {
+  book = book || {};
+  const nowIso = new Date().toISOString();
+  const status = book.status === 'finished' || book.done === true ? 'finished' : 'reading';
+  const doubanId = book.doubanId || getDoubanBookId(book.url);
+  return {
+    id: book.id || 'calendar_book_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    title: book.title || '未命名书籍',
+    url: book.url || (doubanId ? getDoubanBookUrl(doubanId) : ''),
+    doubanId,
+    isbn: String(book.isbn || '').replace(/[^0-9X]/gi, ''),
+    cover: normalizeBookCoverUrl(book.cover),
+    fallbackCover: String(book.fallbackCover || ''),
+    status,
+    createdAt: book.createdAt || nowIso,
+    updatedAt: book.updatedAt || book.createdAt || nowIso,
+    finishedAt: status === 'finished' ? (book.finishedAt || book.completedAt || nowIso) : null,
+  };
+}
+
 function normalizeCalendarProject(project) {
   project = project || {};
   const days = project.days && typeof project.days === 'object' ? project.days : {};
+  const books = Array.isArray(project.books) ? project.books.map(normalizeCalendarBook) : [];
   return {
     id: project.id || 'calendar_project_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     name: project.name || project.title || '打卡项目',
     days,
+    books,
     createdAt: project.createdAt || new Date().toISOString(),
   };
 }
@@ -2526,6 +2568,245 @@ function renderVideoCollectionGrid() {
   countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.avg}%`;
 }
 
+function isReadingCalendarProject(project) {
+  return Boolean(project && (/阅读|读书|书架/i.test(project.name || '') || (project.books || []).length));
+}
+
+function createBookPlaceholder(book) {
+  const title = String((book && book.title) || '书籍').slice(0, 12);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="500" viewBox="0 0 360 500">
+    <rect width="360" height="500" fill="#242424"/><rect x="28" y="30" width="304" height="440" rx="6" fill="#303030" stroke="#555"/>
+    <text x="180" y="240" fill="#d7d7d7" font-family="sans-serif" font-size="28" text-anchor="middle">${title.replace(/[&<>"']/g, '')}</text>
+    <text x="180" y="285" fill="#888" font-family="sans-serif" font-size="18" text-anchor="middle">豆瓣书籍</text>
+  </svg>`;
+  return 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+}
+
+async function fetchDoubanBookMetadata(input) {
+  const doubanId = getDoubanBookId(input);
+  if (!doubanId) throw new Error('请输入有效的豆瓣图书链接');
+  const url = getDoubanBookUrl(doubanId);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 20000);
+
+  try {
+    const response = await fetch('https://r.jina.ai/' + url, {
+      headers: {
+        Accept: 'application/json',
+        'X-With-Images-Summary': 'true',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`获取书籍信息失败 (${response.status})`);
+    const payload = await response.json();
+    const data = payload && payload.data ? payload.data : payload;
+    const images = data && data.images && typeof data.images === 'object' ? Object.entries(data.images) : [];
+    const metadata = data && data.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+    const primaryCover = images.find(([label, imageUrl]) => {
+      return /^Image 1(?:\D|$)/i.test(label) && /doubanio\.com\/view\/subject\//i.test(String(imageUrl));
+    });
+    const anySubjectCover = images.find(([, imageUrl]) => /doubanio\.com\/view\/subject\/[a-z]+\/public\//i.test(String(imageUrl)));
+    const coverEntry = primaryCover || anySubjectCover;
+    const rawIsbn = Array.isArray(metadata['book:isbn']) ? metadata['book:isbn'][0] : metadata['book:isbn'];
+    const isbn = String(rawIsbn || '').replace(/[^0-9X]/gi, '');
+    const title = String((data && data.title) || '').replace(/\s*[-|]\s*豆瓣\s*$/i, '').trim();
+    if (!title) throw new Error('没有读取到书名');
+
+    return normalizeCalendarBook({
+      id: 'calendar_book_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      title,
+      url,
+      doubanId,
+      isbn,
+      cover: coverEntry ? coverEntry[1] : '',
+      fallbackCover: isbn ? `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(isbn)}-L.jpg?default=false` : '',
+      status: 'reading',
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    if (error && error.name === 'AbortError') throw new Error('获取书籍信息超时，请稍后重试');
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function addBookToCalendarProject(project, button) {
+  const input = (prompt('粘贴豆瓣图书链接，例如：https://book.douban.com/subject/1007305/') || '').trim();
+  if (!input) return;
+  const doubanId = getDoubanBookId(input);
+  if (!doubanId) {
+    alert('这不是有效的豆瓣图书链接，请打开豆瓣图书详情页后复制地址。');
+    return;
+  }
+  if ((project.books || []).some(book => book.doubanId === doubanId)) {
+    alert('这本书已经在当前书架中。');
+    return;
+  }
+
+  const oldText = button ? button.textContent : '';
+  if (button) {
+    button.disabled = true;
+    button.textContent = '正在获取...';
+  }
+  try {
+    const book = await fetchDoubanBookMetadata(input);
+    const currentProject = calendarProjects.find(item => item.id === project.id);
+    if (!currentProject) return;
+    if (!Array.isArray(currentProject.books)) currentProject.books = [];
+    currentProject.books.push(book);
+    saveCalendarProjects();
+    renderMonthCalendar();
+    renderSidebar();
+  } catch (error) {
+    alert((error && error.message ? error.message : '获取书籍信息失败') + '。请检查链接或网络后重试。');
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.textContent = oldText;
+    }
+  }
+}
+
+function updateCalendarBookStatus(projectId, bookId, nextStatus) {
+  const project = calendarProjects.find(item => item.id === projectId);
+  const book = project && (project.books || []).find(item => item.id === bookId);
+  if (!book) return;
+  const nowIso = new Date().toISOString();
+  book.status = nextStatus === 'finished' ? 'finished' : 'reading';
+  book.finishedAt = book.status === 'finished' ? (book.finishedAt || nowIso) : null;
+  book.updatedAt = nowIso;
+  if (book.status === 'finished') ding();
+  saveCalendarProjects();
+  renderMonthCalendar();
+}
+
+function deleteCalendarBook(projectId, bookId) {
+  const project = calendarProjects.find(item => item.id === projectId);
+  if (!project) return;
+  const book = (project.books || []).find(item => item.id === bookId);
+  if (!book || !confirm(`确定从书架移除《${book.title}》吗？`)) return;
+  project.books = project.books.filter(item => item.id !== bookId);
+  saveCalendarProjects();
+  renderMonthCalendar();
+}
+
+function createBookCard(project, book) {
+  const card = document.createElement('article');
+  card.className = 'book-card';
+
+  const coverLink = document.createElement('a');
+  coverLink.className = 'book-cover';
+  coverLink.href = book.url;
+  coverLink.target = '_blank';
+  coverLink.rel = 'noopener noreferrer';
+  coverLink.title = `在豆瓣打开《${book.title}》`;
+  const image = document.createElement('img');
+  image.src = book.cover || createBookPlaceholder(book);
+  image.alt = book.title;
+  image.loading = 'lazy';
+  image.referrerPolicy = 'no-referrer';
+  image.onerror = () => {
+    if (!image.dataset.smallCoverTried && image.src.includes('/view/subject/l/public/')) {
+      image.dataset.smallCoverTried = 'true';
+      image.src = image.src.replace('/view/subject/l/public/', '/view/subject/s/public/');
+      return;
+    }
+    if (!image.dataset.fallbackCoverTried && book.fallbackCover) {
+      image.dataset.fallbackCoverTried = 'true';
+      image.src = book.fallbackCover;
+      return;
+    }
+    image.onerror = null;
+    image.src = createBookPlaceholder(book);
+  };
+  coverLink.appendChild(image);
+
+  const info = document.createElement('div');
+  info.className = 'book-info';
+  const titleLink = document.createElement('a');
+  titleLink.className = 'book-title';
+  titleLink.href = book.url;
+  titleLink.target = '_blank';
+  titleLink.rel = 'noopener noreferrer';
+  titleLink.textContent = book.title;
+  const source = document.createElement('span');
+  source.className = 'book-source';
+  source.textContent = book.status === 'finished' ? '已读完' : '正在阅读';
+
+  const actions = document.createElement('div');
+  actions.className = 'book-actions';
+  const statusButton = document.createElement('button');
+  statusButton.type = 'button';
+  statusButton.className = 'book-status-btn';
+  statusButton.textContent = book.status === 'finished' ? '重新阅读' : '标记读完';
+  statusButton.addEventListener('click', () => {
+    updateCalendarBookStatus(project.id, book.id, book.status === 'finished' ? 'reading' : 'finished');
+  });
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'book-delete-btn';
+  deleteButton.textContent = '删除';
+  deleteButton.addEventListener('click', () => deleteCalendarBook(project.id, book.id));
+  actions.appendChild(statusButton);
+  actions.appendChild(deleteButton);
+  info.appendChild(titleLink);
+  info.appendChild(source);
+  info.appendChild(actions);
+  card.appendChild(coverLink);
+  card.appendChild(info);
+  return card;
+}
+
+function renderReadingShelf(project) {
+  const section = document.createElement('section');
+  section.className = 'reading-shelf';
+  const books = (project.books || []).map(normalizeCalendarBook);
+  const reading = books.filter(book => book.status !== 'finished');
+  const finished = books.filter(book => book.status === 'finished');
+
+  const header = document.createElement('div');
+  header.className = 'reading-shelf-header';
+  const heading = document.createElement('div');
+  heading.innerHTML = `<strong>阅读书架</strong><span>${reading.length} 本在读 · ${finished.length} 本读完</span>`;
+  const addButton = document.createElement('button');
+  addButton.type = 'button';
+  addButton.className = 'book-add-btn';
+  addButton.textContent = '+ 添加豆瓣书籍';
+  addButton.addEventListener('click', () => addBookToCalendarProject(project, addButton));
+  header.appendChild(heading);
+  header.appendChild(addButton);
+  section.appendChild(header);
+
+  const shelves = document.createElement('div');
+  shelves.className = 'book-shelves';
+  [
+    { title: '正在阅读', books: reading, empty: '还没有正在阅读的书' },
+    { title: '已读完', books: finished, empty: '读完的书会出现在这里' },
+  ].forEach(group => {
+    const shelf = document.createElement('div');
+    shelf.className = 'book-shelf-group';
+    const shelfTitle = document.createElement('div');
+    shelfTitle.className = 'book-shelf-title';
+    shelfTitle.innerHTML = `<strong>${group.title}</strong><span>${group.books.length}</span>`;
+    const grid = document.createElement('div');
+    grid.className = 'book-grid';
+    if (group.books.length) {
+      group.books.forEach(book => grid.appendChild(createBookCard(project, book)));
+    } else {
+      const empty = document.createElement('div');
+      empty.className = 'book-shelf-empty';
+      empty.textContent = group.empty;
+      grid.appendChild(empty);
+    }
+    shelf.appendChild(shelfTitle);
+    shelf.appendChild(grid);
+    shelves.appendChild(shelf);
+  });
+  section.appendChild(shelves);
+  return section;
+}
+
 function renderCalendar() {
   list.innerHTML = '';
   clearDoneBtn.style.display = 'none';
@@ -2660,6 +2941,10 @@ function renderMonthCalendar() {
     back.textContent = '查看全部项目';
     back.addEventListener('click', () => switchToList('calendar'));
     view.appendChild(back);
+  }
+
+  if (activeProject && isReadingCalendarProject(activeProject)) {
+    view.appendChild(renderReadingShelf(activeProject));
   }
 
   const grid = document.createElement('div');
