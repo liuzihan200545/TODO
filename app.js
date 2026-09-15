@@ -396,6 +396,8 @@ function normalizeVideoCollection(collection) {
     id: collection.id || 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
     name: collection.name || collection.title || '默认收藏夹',
     videos,
+    sourceBvid: normalizeBvid(collection.sourceBvid || collection.sourceUrl || ''),
+    sourceUrl: collection.sourceUrl || '',
     createdAt: collection.createdAt || new Date().toISOString(),
   };
 }
@@ -2306,6 +2308,7 @@ function parseBilibiliPayload(payload, bvid) {
     title: payload.data.title || getBilibiliVideoTitle(bvid),
     cover: normalizeCoverUrl(payload.data.pic || ''),
     duration: Number(payload.data.duration) || 0,
+    pages: Array.isArray(payload.data.pages) ? payload.data.pages : [],
   };
 }
 
@@ -2323,6 +2326,24 @@ async function fetchBilibiliMetadata(input) {
     const payload = await response.json();
     return parseBilibiliPayload(payload, bvid);
   }
+}
+
+async function fetchBilibiliPageList(input) {
+  const bvid = normalizeBvid(input);
+  if (!bvid) throw new Error('请输入有效的 BV 号或 B 站视频链接');
+  const endpoint = 'https://api.bilibili.com/x/player/pagelist?bvid=' + encodeURIComponent(bvid);
+  let payload;
+  try {
+    payload = await fetchJsonp(endpoint, 'callback');
+  } catch (jsonpError) {
+    const response = await fetch(endpoint, { mode: 'cors' });
+    if (!response.ok) throw jsonpError;
+    payload = await response.json();
+  }
+  if (!payload || payload.code !== 0 || !Array.isArray(payload.data) || !payload.data.length) {
+    throw new Error((payload && payload.message) || '没有获取到合集分集信息');
+  }
+  return { bvid, pages: payload.data };
 }
 
 function createVideoPlaceholder(video) {
@@ -4152,6 +4173,98 @@ function createVideoCollection() {
   return collection;
 }
 
+async function importBilibiliSeries() {
+  const inputValue = (prompt('输入 B 站多 P 视频链接或 BV 号，将整套视频导入为收藏夹') || '').trim();
+  if (!inputValue) return null;
+  const bvid = normalizeBvid(inputValue);
+  if (!bvid) {
+    alert('请输入有效的 B 站视频链接或 BV 号。');
+    return null;
+  }
+
+  addVideoBtn.disabled = true;
+  addVideoBtn.classList.add('loading');
+  addVideoBtn.title = '正在导入视频合集';
+  try {
+    const metadata = await fetchBilibiliMetadata(bvid);
+    const pageResult = metadata.pages && metadata.pages.length
+      ? { bvid, pages: metadata.pages }
+      : await fetchBilibiliPageList(bvid);
+    const nowIso = new Date().toISOString();
+    const pages = pageResult.pages;
+    const collection = normalizeVideoCollection({
+      id: 'video_collection_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      name: metadata.title || `${bvid} 视频合集`,
+      sourceBvid: bvid,
+      sourceUrl: getBilibiliVideoUrl(bvid),
+      createdAt: nowIso,
+      videos: pages.map((page, index) => normalizeVideoProject({
+        id: 'video_project_' + Date.now() + '_' + index + '_' + Math.random().toString(36).slice(2, 7),
+        title: String(page.part || '').trim() || `第 ${Number(page.page) || index + 1} 集`,
+        url: `${getBilibiliVideoUrl(bvid)}/?p=${Number(page.page) || index + 1}`,
+        bvid,
+        cover: metadata.cover || '',
+        duration: Number(page.duration) || 0,
+        progressPercent: 0,
+        done: false,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      })),
+    });
+    videoCollections.push(collection);
+    saveVideoCollections();
+    switchToList('video-collection:' + collection.id);
+    alert(`已导入“${collection.name}”，共 ${collection.videos.length} 集。`);
+    return collection;
+  } catch (error) {
+    console.warn('Bilibili series import failed:', error);
+    alert(`视频合集导入失败：${error && error.message ? error.message : '请检查链接后重试'}`);
+    return null;
+  } finally {
+    addVideoBtn.disabled = false;
+    addVideoBtn.classList.remove('loading');
+    addVideoBtn.title = '添加视频收藏夹或导入合集';
+  }
+}
+
+let videoAddMenu = null;
+
+function closeVideoAddMenu() {
+  if (!videoAddMenu) return;
+  videoAddMenu.remove();
+  videoAddMenu = null;
+}
+
+function openVideoAddMenu() {
+  closeVideoAddMenu();
+  const menu = document.createElement('div');
+  menu.className = 'video-add-menu';
+  const createButton = document.createElement('button');
+  createButton.type = 'button';
+  createButton.innerHTML = '<strong>新建空收藏夹</strong><span>之后逐个添加 BV 视频</span>';
+  createButton.addEventListener('click', () => {
+    closeVideoAddMenu();
+    createVideoCollection();
+  });
+  const importButton = document.createElement('button');
+  importButton.type = 'button';
+  importButton.innerHTML = '<strong>导入多 P 视频合集</strong><span>通过链接一次导入全部分集</span>';
+  importButton.addEventListener('click', () => {
+    closeVideoAddMenu();
+    importBilibiliSeries();
+  });
+  menu.appendChild(createButton);
+  menu.appendChild(importButton);
+  document.body.appendChild(menu);
+  const buttonRect = addVideoBtn.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(buttonRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+  const top = Math.min(buttonRect.bottom + 6, window.innerHeight - menuRect.height - 8);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+  videoAddMenu = menu;
+}
+
 async function addVideoToCollection(collection) {
   if (!collection) return;
   const inputValue = prompt('输入 B 站视频 BV 号，添加到“' + collection.name + '”');
@@ -4170,8 +4283,12 @@ videoLabel.addEventListener('click', (e) => {
 
 addVideoBtn.addEventListener('click', (e) => {
   e.stopImmediatePropagation();
-  createVideoCollection();
+  openVideoAddMenu();
 }, true);
+
+document.addEventListener('click', (event) => {
+  if (videoAddMenu && !videoAddMenu.contains(event.target) && event.target !== addVideoBtn) closeVideoAddMenu();
+});
 
 addCalendarBtn.addEventListener('click', () => {
   const name = (prompt('添加日历打卡项目，例如：练琴、运动') || '').trim();

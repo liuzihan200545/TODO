@@ -2197,6 +2197,54 @@ body {
   background: var(--bg-btn-hover);
 }
 
+.video-add-menu {
+  position: fixed;
+  z-index: 1300;
+  width: 238px;
+  overflow: hidden;
+  border: 1px solid var(--border-divider);
+  border-radius: 8px;
+  background: var(--bg-sidebar);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.video-add-menu button {
+  display: flex;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border-divider);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-direction: column;
+  gap: 4px;
+  font-family: inherit;
+  text-align: left;
+}
+
+.video-add-menu button:last-child {
+  border-bottom: 0;
+}
+
+.video-add-menu button:hover {
+  background: var(--bg-btn-hover);
+}
+
+.video-add-menu strong {
+  font-size: 14px;
+}
+
+.video-add-menu span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+#addVideoBtn.loading {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 @media (max-width: 760px) {
   .video-toolbar {
     align-items: stretch;
