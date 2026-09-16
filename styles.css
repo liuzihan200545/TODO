@@ -2167,6 +2167,40 @@ body {
   accent-color: var(--accent);
 }
 
+.video-time-control {
+  display: grid;
+  grid-template-columns: auto minmax(58px, 76px) minmax(0, auto);
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.video-time-control input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-divider);
+  border-radius: 5px;
+  outline: none;
+  background: rgba(var(--card-rgb), 0.72);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+.video-time-control input:focus {
+  border-color: var(--accent);
+}
+
+.video-time-control input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .video-context-menu {
   position: fixed;
   z-index: 10000;

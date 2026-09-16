@@ -629,6 +629,56 @@ function parseDurationInput(value) {
   return 0;
 }
 
+function createVideoTimeControl(video, afterRender) {
+  const row = document.createElement('div');
+  row.className = 'video-time-control';
+  const label = document.createElement('span');
+  label.textContent = '已看到';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.inputMode = 'numeric';
+  input.placeholder = '00:00';
+  input.setAttribute('aria-label', `${video.title} 已播放时间`);
+  const total = document.createElement('span');
+  const duration = Number(video.duration) || 0;
+  const currentSeconds = duration ? Math.round(duration * getVideoProgress(video) / 100) : 0;
+  input.value = duration ? formatDuration(currentSeconds) : '';
+  input.disabled = !duration;
+  input.title = duration ? '输入格式：12:34 或 1:02:30' : '该视频缺少时长信息';
+  total.textContent = duration ? `/ ${formatDuration(duration)}` : '缺少总时长';
+
+  const commit = () => {
+    const text = input.value.trim();
+    if (!duration) return;
+    if (!text) {
+      input.value = formatDuration(currentSeconds);
+      return;
+    }
+    const seconds = parseDurationInput(text);
+    const isZeroTime = /^0+(?::0+){0,2}$/.test(text);
+    if ((!seconds && !isZeroTime) || seconds < 0) {
+      alert('请输入有效时间，例如 12:34 或 1:02:30。');
+      input.value = formatDuration(currentSeconds);
+      return;
+    }
+    const progress = Math.min(100, Math.round(seconds / duration * 100));
+    updateVideoProgress(video, progress, afterRender);
+  };
+  input.addEventListener('change', commit);
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') input.blur();
+    if (event.key === 'Escape') {
+      input.value = formatDuration(currentSeconds);
+      input.blur();
+    }
+  });
+
+  row.appendChild(label);
+  row.appendChild(input);
+  row.appendChild(total);
+  return row;
+}
+
 function getVideoProgress(video) {
   return clampPercent(video && video.progressPercent);
 }
@@ -2579,6 +2629,7 @@ function renderVideoGrid() {
     body.appendChild(meta);
     body.appendChild(progressRow);
     body.appendChild(controls);
+    body.appendChild(createVideoTimeControl(video, renderVideoGrid));
     card.appendChild(coverLink);
     card.appendChild(body);
     grid.appendChild(card);
@@ -2705,6 +2756,7 @@ function renderVideoCollectionGrid() {
     body.appendChild(meta);
     body.appendChild(progressRow);
     body.appendChild(controls);
+    body.appendChild(createVideoTimeControl(video));
     card.appendChild(coverLink);
     card.appendChild(body);
     grid.appendChild(card);
