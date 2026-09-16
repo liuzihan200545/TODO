@@ -263,6 +263,8 @@ const pomodoroHeading = document.getElementById('pomodoroHeading');
 const pomodoroPhaseLabel = document.getElementById('pomodoroPhaseLabel');
 const pomodoroTargetSelect = document.getElementById('pomodoroTargetSelect');
 const pomodoroClock = document.getElementById('pomodoroClock');
+const pomodoroDialProgress = document.getElementById('pomodoroDialProgress');
+const pomodoroDialCaption = document.getElementById('pomodoroDialCaption');
 const pomodoroFocusMinutes = document.getElementById('pomodoroFocusMinutes');
 const pomodoroBreakMinutes = document.getElementById('pomodoroBreakMinutes');
 const pomodoroStartBtn = document.getElementById('pomodoroStartBtn');
@@ -4492,6 +4494,10 @@ function createPomodoroState(source) {
   const phase = state.phase === 'break' ? 'break' : 'focus';
   const defaultSeconds = (phase === 'break' ? breakMinutes : focusMinutes) * 60;
   const savedRemaining = Number(state.remainingSeconds);
+  const savedPosition = state.position && typeof state.position === 'object' ? state.position : null;
+  const position = savedPosition && Number.isFinite(Number(savedPosition.left)) && Number.isFinite(Number(savedPosition.top))
+    ? { left: Math.max(0, Number(savedPosition.left)), top: Math.max(0, Number(savedPosition.top)) }
+    : null;
   return {
     targetKey: typeof state.targetKey === 'string' ? state.targetKey : '',
     targetLabel: typeof state.targetLabel === 'string' ? state.targetLabel : '',
@@ -4504,6 +4510,7 @@ function createPomodoroState(source) {
     running: Boolean(state.running),
     startedAt: typeof state.startedAt === 'string' ? state.startedAt : '',
     minimized: Boolean(state.minimized),
+    position,
   };
 }
 
@@ -4519,6 +4526,36 @@ let pomodoroState = loadPomodoroState();
 
 function savePomodoroState() {
   localStorage.setItem(POMODORO_STATE_KEY, JSON.stringify(pomodoroState));
+}
+
+function applyPomodoroPosition() {
+  const position = pomodoroState.position;
+  if (!position) {
+    pomodoroWidget.style.left = '';
+    pomodoroWidget.style.top = '';
+    pomodoroWidget.style.right = '';
+    pomodoroWidget.style.bottom = '';
+    return;
+  }
+  const rect = pomodoroWidget.getBoundingClientRect();
+  const maxLeft = Math.max(0, window.innerWidth - rect.width);
+  const maxTop = Math.max(0, window.innerHeight - rect.height);
+  const left = Math.min(maxLeft, Math.max(0, position.left));
+  const top = Math.min(maxTop, Math.max(0, position.top));
+  pomodoroWidget.style.left = `${left}px`;
+  pomodoroWidget.style.top = `${top}px`;
+  pomodoroWidget.style.right = 'auto';
+  pomodoroWidget.style.bottom = 'auto';
+  if (left !== position.left || top !== position.top) {
+    pomodoroState.position = { left, top };
+    savePomodoroState();
+  }
+}
+
+function resetPomodoroPosition() {
+  pomodoroState.position = null;
+  savePomodoroState();
+  applyPomodoroPosition();
 }
 
 function getPomodoroTargetKey(listId, todo) {
@@ -4765,6 +4802,8 @@ function startPomodoroTicker() {
 function renderPomodoroWidget() {
   const remaining = getPomodoroRemainingSeconds();
   const isBreak = pomodoroState.phase === 'break';
+  const phaseDuration = (isBreak ? pomodoroState.breakMinutes : pomodoroState.focusMinutes) * 60;
+  const dialProgress = phaseDuration ? Math.max(0, Math.min(100, (remaining / phaseDuration) * 100)) : 0;
   pomodoroWidget.classList.toggle('break-phase', isBreak);
   pomodoroWidget.classList.toggle('minimized', pomodoroState.minimized);
   pomodoroHeading.textContent = isBreak ? '休息时间' : '番茄钟';
@@ -4772,6 +4811,10 @@ function renderPomodoroWidget() {
     ? (pomodoroState.running ? '放松一下，再继续前进' : '休息暂停中')
     : (getPomodoroTargetLabel() || '选择任务后开始专注');
   pomodoroClock.textContent = formatDuration(remaining);
+  pomodoroDialProgress.style.strokeDashoffset = String(100 - dialProgress);
+  pomodoroDialCaption.textContent = isBreak
+    ? (pomodoroState.running ? '正在休息' : '休息暂停中')
+    : (pomodoroState.running ? '正在专注' : '准备专注');
   pomodoroFocusMinutes.value = String(pomodoroState.focusMinutes);
   pomodoroBreakMinutes.value = String(pomodoroState.breakMinutes);
   pomodoroTargetSelect.disabled = pomodoroState.running || isBreak;
@@ -4783,6 +4826,7 @@ function renderPomodoroWidget() {
   pomodoroNote.textContent = pomodoroState.running
     ? (isBreak ? '休息不计入专注时长。' : '暂停或结束本轮时会保存实际专注用时。')
     : '本机计时；普通任务和视频的累计专注时长会同步。';
+  if (!pomodoroWidget.hidden) applyPomodoroPosition();
 }
 
 function openPomodoroWidget() {
@@ -4827,6 +4871,52 @@ pomodoroCloseBtn.addEventListener('click', async () => {
   render();
   renderSidebar();
   refreshPomodoroTargets();
+});
+
+const pomodoroHead = pomodoroWidget.querySelector('.pomodoro-head');
+let pomodoroDrag = null;
+
+pomodoroHead.addEventListener('pointerdown', event => {
+  if (event.button !== 0 || event.target.closest('button')) return;
+  const rect = pomodoroWidget.getBoundingClientRect();
+  pomodoroDrag = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  pomodoroWidget.classList.add('dragging');
+  pomodoroHead.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+
+pomodoroHead.addEventListener('pointermove', event => {
+  if (!pomodoroDrag || event.pointerId !== pomodoroDrag.pointerId) return;
+  const rect = pomodoroWidget.getBoundingClientRect();
+  const left = Math.min(Math.max(0, event.clientX - pomodoroDrag.offsetX), Math.max(0, window.innerWidth - rect.width));
+  const top = Math.min(Math.max(0, event.clientY - pomodoroDrag.offsetY), Math.max(0, window.innerHeight - rect.height));
+  pomodoroState.position = { left, top };
+  pomodoroWidget.style.left = `${left}px`;
+  pomodoroWidget.style.top = `${top}px`;
+  pomodoroWidget.style.right = 'auto';
+  pomodoroWidget.style.bottom = 'auto';
+});
+
+function finishPomodoroDrag(event) {
+  if (!pomodoroDrag || event.pointerId !== pomodoroDrag.pointerId) return;
+  if (pomodoroHead.hasPointerCapture(event.pointerId)) pomodoroHead.releasePointerCapture(event.pointerId);
+  pomodoroDrag = null;
+  pomodoroWidget.classList.remove('dragging');
+  savePomodoroState();
+}
+
+pomodoroHead.addEventListener('pointerup', finishPomodoroDrag);
+pomodoroHead.addEventListener('pointercancel', finishPomodoroDrag);
+pomodoroHead.addEventListener('dblclick', event => {
+  if (event.target.closest('button')) return;
+  resetPomodoroPosition();
+});
+window.addEventListener('resize', () => {
+  if (!pomodoroWidget.hidden) applyPomodoroPosition();
 });
 
 function updatePomodoroDuration(input, kind) {

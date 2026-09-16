@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Microsoft To Do</title>
-  <link rel="stylesheet" href="styles.css?v=20260916-pomodoro">
+  <link rel="stylesheet" href="styles.css?v=20260916-pomodoro-dial">
 </head>
 <body>
   <div class="app">
@@ -157,7 +157,7 @@
   </div>
 
   <aside class="pomodoro-widget" id="pomodoroWidget" hidden aria-live="polite">
-    <div class="pomodoro-head">
+    <div class="pomodoro-head" title="拖动移动番茄钟，双击恢复默认位置">
       <div>
         <strong id="pomodoroHeading">番茄钟</strong>
         <span id="pomodoroPhaseLabel">选择任务后开始专注</span>
@@ -172,7 +172,16 @@
         <span>专注任务</span>
         <select id="pomodoroTargetSelect"></select>
       </label>
-      <div class="pomodoro-clock" id="pomodoroClock">25:00</div>
+      <div class="pomodoro-dial" role="timer" aria-live="off" aria-label="番茄钟剩余时间">
+        <svg class="pomodoro-dial-ring" viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="pomodoro-dial-track" cx="100" cy="100" r="86" pathLength="100"></circle>
+          <circle class="pomodoro-dial-progress" id="pomodoroDialProgress" cx="100" cy="100" r="86" pathLength="100"></circle>
+        </svg>
+        <div class="pomodoro-dial-content">
+          <div class="pomodoro-clock" id="pomodoroClock">25:00</div>
+          <span id="pomodoroDialCaption">准备专注</span>
+        </div>
+      </div>
       <div class="pomodoro-durations">
         <label><span>专注</span><input id="pomodoroFocusMinutes" type="number" min="1" max="180" inputmode="numeric"><em>分钟</em></label>
         <label><span>休息</span><input id="pomodoroBreakMinutes" type="number" min="1" max="60" inputmode="numeric"><em>分钟</em></label>
@@ -188,6 +197,6 @@
   </aside>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=20260916-pomodoro"></script>
+  <script src="app.js?v=20260916-pomodoro-dial"></script>
 </body>
 </html>

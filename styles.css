@@ -793,6 +793,11 @@ body {
   color: var(--text-primary);
 }
 
+.pomodoro-widget.dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
 .pomodoro-head {
   display: flex;
   align-items: center;
@@ -800,6 +805,8 @@ body {
   gap: 12px;
   padding: 13px 14px 11px;
   border-bottom: 1px solid var(--border-divider);
+  cursor: grab;
+  touch-action: none;
 }
 
 .pomodoro-head strong,
@@ -847,16 +854,62 @@ body {
 .pomodoro-target-field select:focus,
 .pomodoro-durations input:focus { border-color: var(--accent); }
 
+.pomodoro-dial {
+  position: relative;
+  width: min(214px, 72vw);
+  aspect-ratio: 1;
+  margin: 15px auto 13px;
+}
+
+.pomodoro-dial-ring {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.pomodoro-dial-track,
+.pomodoro-dial-progress {
+  fill: none;
+  stroke-width: 11;
+}
+
+.pomodoro-dial-track { stroke: var(--border-divider); }
+.pomodoro-dial-progress {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.35s linear, stroke 0.2s ease;
+}
+
+.pomodoro-dial-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
 .pomodoro-clock {
-  margin: 14px 0;
   color: var(--text-primary);
-  font-size: 48px;
+  font-size: 42px;
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+
+.pomodoro-dial-content span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pomodoro-widget.break-phase .pomodoro-dial-progress { stroke: #60a5fa; }
 .pomodoro-widget.break-phase .pomodoro-clock { color: #60a5fa; }
 
 .pomodoro-durations { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
