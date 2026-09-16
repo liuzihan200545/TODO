@@ -257,6 +257,21 @@ const aiGenerateBtn = document.getElementById('aiGenerateBtn');
 const aiSummaryStatus = document.getElementById('aiSummaryStatus');
 const aiSummaryResult = document.getElementById('aiSummaryResult');
 const aiSummaryHistory = document.getElementById('aiSummaryHistory');
+const pomodoroBtn = document.getElementById('pomodoroBtn');
+const pomodoroWidget = document.getElementById('pomodoroWidget');
+const pomodoroHeading = document.getElementById('pomodoroHeading');
+const pomodoroPhaseLabel = document.getElementById('pomodoroPhaseLabel');
+const pomodoroTargetSelect = document.getElementById('pomodoroTargetSelect');
+const pomodoroClock = document.getElementById('pomodoroClock');
+const pomodoroFocusMinutes = document.getElementById('pomodoroFocusMinutes');
+const pomodoroBreakMinutes = document.getElementById('pomodoroBreakMinutes');
+const pomodoroStartBtn = document.getElementById('pomodoroStartBtn');
+const pomodoroEndBtn = document.getElementById('pomodoroEndBtn');
+const pomodoroSkipBtn = document.getElementById('pomodoroSkipBtn');
+const pomodoroMinimizeBtn = document.getElementById('pomodoroMinimizeBtn');
+const pomodoroCloseBtn = document.getElementById('pomodoroCloseBtn');
+const pomodoroRestoreBtn = document.getElementById('pomodoroRestoreBtn');
+const pomodoroNote = document.getElementById('pomodoroNote');
 
 let searchQuery = '';
 let activeListId = 'tasks';
@@ -600,6 +615,7 @@ function normalizeVideoProject(video) {
     bvid: normalizeBvid(video.bvid || video.url || ''),
     cover: normalizeCoverUrl(video.cover || ''),
     duration: Number.isFinite(Number(video.duration)) ? Math.max(0, Math.round(Number(video.duration))) : 0,
+    focusSeconds: normalizeFocusSeconds(video.focusSeconds),
     progressPercent: progress,
     done,
     completedAt: done && video.completedAt ? video.completedAt : null,
@@ -607,6 +623,21 @@ function normalizeVideoProject(video) {
     createdAt: video.createdAt || nowIso,
     updatedAt: video.updatedAt || video.createdAt || nowIso,
   };
+}
+
+function normalizeFocusSeconds(value) {
+  const seconds = Math.round(Number(value) || 0);
+  return Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+}
+
+function formatFocusTime(seconds) {
+  const total = normalizeFocusSeconds(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours && minutes) return `专注 ${hours}小时${minutes}分`;
+  if (hours) return `专注 ${hours}小时`;
+  if (minutes) return `专注 ${minutes}分`;
+  return total ? `专注 ${total}秒` : '';
 }
 
 function formatDuration(seconds) {
@@ -2401,7 +2432,9 @@ function createVideoPlaceholder(video) {
   return `https://placehold.co/640x360/202020/60a5fa?text=${title}`;
 }
 
-function updateVideoProgress(video, value, afterRender) {
+async function updateVideoProgress(video, value, afterRender) {
+  const collection = videoCollections.find(item => (item.videos || []).some(candidate => candidate.id === video.id));
+  if (collection) await stopPomodoroForTarget(`video:${collection.id}:${video.id}`);
   const wasDone = video.done;
   video.progressPercent = clampPercent(value);
   video.done = video.progressPercent >= 100;
@@ -2412,6 +2445,7 @@ function updateVideoProgress(video, value, afterRender) {
   if (typeof afterRender === 'function') afterRender();
   else renderVideoCollectionGrid();
   renderSidebar();
+  refreshPomodoroTargets();
 }
 
 function closeVideoContextMenu() {
@@ -2431,13 +2465,15 @@ function openVideoContextMenu(event, collection, video) {
   const del = document.createElement('button');
   del.type = 'button';
   del.textContent = '删除视频';
-  del.addEventListener('click', () => {
+  del.addEventListener('click', async () => {
     closeVideoContextMenu();
     if (!confirm('确定删除这个视频吗？')) return;
+    await stopPomodoroForTarget(`video:${collection.id}:${video.id}`);
     collection.videos = collection.videos.filter(item => item.id !== video.id);
     saveVideoCollections();
     renderVideoCollectionGrid();
     renderSidebar();
+    refreshPomodoroTargets();
   });
   menu.appendChild(del);
   document.body.appendChild(menu);
@@ -2511,6 +2547,9 @@ function renderVideo() {
   const meta = document.createElement('div');
   meta.className = 'video-meta';
   meta.textContent = video.done ? '已完成学习' : '未完成学习';
+  if (video.done && normalizeFocusSeconds(video.focusSeconds)) {
+    meta.textContent += ` · ${formatFocusTime(video.focusSeconds)}`;
+  }
 
   main.appendChild(title);
   main.appendChild(link);
@@ -2627,6 +2666,12 @@ function renderVideoGrid() {
     controls.appendChild(range);
     body.appendChild(titleLink);
     body.appendChild(meta);
+    if (video.done && normalizeFocusSeconds(video.focusSeconds)) {
+      const focusTime = document.createElement('div');
+      focusTime.className = 'focus-time-badge video-focus-time';
+      focusTime.textContent = formatFocusTime(video.focusSeconds);
+      body.appendChild(focusTime);
+    }
     body.appendChild(progressRow);
     body.appendChild(controls);
     body.appendChild(createVideoTimeControl(video, renderVideoGrid));
@@ -2754,6 +2799,12 @@ function renderVideoCollectionGrid() {
     controls.appendChild(range);
     body.appendChild(titleLink);
     body.appendChild(meta);
+    if (video.done && normalizeFocusSeconds(video.focusSeconds)) {
+      const focusTime = document.createElement('div');
+      focusTime.className = 'focus-time-badge video-focus-time';
+      focusTime.textContent = formatFocusTime(video.focusSeconds);
+      body.appendChild(focusTime);
+    }
     body.appendChild(progressRow);
     body.appendChild(controls);
     body.appendChild(createVideoTimeControl(video));
@@ -3081,6 +3132,7 @@ function createLocalPdfRecord(projectId, file, preview) {
     createdAt: nowIso,
     done: false,
     completedAt: null,
+    focusSeconds: 0,
     important: false,
     myDay: null,
     dueDate: null,
@@ -3183,15 +3235,18 @@ async function openLocalPdf(documentId) {
 async function removeLocalPdf(pdfDocument) {
   if (!confirm(`确定删除“${pdfDocument.fileName}”吗？此操作只影响当前设备。`)) return;
   try {
+    await stopPomodoroForTarget(`pdf:${pdfDocument.id}`);
     await deleteLocalPdf(pdfDocument.id);
     render();
     renderSidebar();
+    refreshPomodoroTargets();
   } catch (error) {
     alert(error.message || '删除 PDF 失败');
   }
 }
 
 async function toggleLocalPdfDone(pdfDocument) {
+  await stopPomodoroForTarget(`pdf:${pdfDocument.id}`);
   const wasDone = Boolean(pdfDocument.done);
   const updatedDocument = {
     ...pdfDocument,
@@ -3203,6 +3258,7 @@ async function toggleLocalPdfDone(pdfDocument) {
     if (!wasDone) ding();
     render();
     renderSidebar();
+    refreshPomodoroTargets();
   } catch (error) {
     alert(error.message || '无法更新 PDF 代办状态');
   }
@@ -3282,6 +3338,13 @@ function createLocalPdfCard(pdfDocument) {
   localBadge.textContent = pdfDocument.done
     ? `${sourceText}已完成 · ${formatLocalPdfDate(pdfDocument.completedAt)}${dueText}`
     : `${sourceText}待完成${dueText} · 仅保存在此设备`;
+  const focusTime = pdfDocument.done && normalizeFocusSeconds(pdfDocument.focusSeconds)
+    ? document.createElement('span')
+    : null;
+  if (focusTime) {
+    focusTime.className = 'focus-time-badge local-pdf-focus-time';
+    focusTime.textContent = formatFocusTime(pdfDocument.focusSeconds);
+  }
   const actions = document.createElement('div');
   actions.className = 'local-pdf-actions';
   const importantButton = document.createElement('button');
@@ -3325,6 +3388,7 @@ function createLocalPdfCard(pdfDocument) {
   body.appendChild(titleRow);
   body.appendChild(meta);
   body.appendChild(localBadge);
+  if (focusTime) body.appendChild(focusTime);
   body.appendChild(actions);
   card.appendChild(cover);
   card.appendChild(body);
@@ -3705,7 +3769,7 @@ function render() {
         text.textContent = entry.video.title;
         const source = document.createElement('span');
         source.className = 'suggest-source';
-        source.textContent = `${entry.collection.name} · ${getVideoProgress(entry.video)}%`;
+        source.textContent = `${entry.collection.name} · ${getVideoProgress(entry.video)}%${entry.video.done && normalizeFocusSeconds(entry.video.focusSeconds) ? ` · ${formatFocusTime(entry.video.focusSeconds)}` : ''}`;
         text.appendChild(source);
         const progress = document.createElement('div');
         progress.className = 'myday-video-progress';
@@ -3845,7 +3909,9 @@ function render() {
 
     const check = document.createElement('span');
     check.className = 'check';
-    check.addEventListener('click', () => {
+    check.addEventListener('click', async () => {
+      const sourceList = lists.find(listItem => (listItem.todos || []).includes(t));
+      if (sourceList) await stopPomodoroForTarget(getPomodoroTargetKey(sourceList.id, t));
       const wasDone = t.done;
       t.done = !t.done;
       t.completedAt = t.done ? (t.completedAt || new Date().toISOString()) : null;
@@ -3882,6 +3948,12 @@ function render() {
       badge.className = 'due-badge' + (t.dueDate < todayStr() && !t.done ? ' overdue' : '');
       badge.textContent = '📅 ' + formatDate(t.dueDate);
       wrap.appendChild(badge);
+    }
+    if (t.done && normalizeFocusSeconds(t.focusSeconds)) {
+      const focusTime = document.createElement('span');
+      focusTime.className = 'focus-time-badge';
+      focusTime.textContent = formatFocusTime(t.focusSeconds);
+      wrap.appendChild(focusTime);
     }
 
     const actions = document.createElement('span');
@@ -3927,12 +3999,13 @@ function render() {
     delBtn.className = 'del-btn';
     delBtn.textContent = '🗑';
     delBtn.title = '删除';
-    delBtn.addEventListener('click', (e) => {
+    delBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       // find and remove from source list (works for both smart and regular lists)
       for (const l of lists) {
         const idx = l.todos.indexOf(t);
         if (idx !== -1) {
+          await stopPomodoroForTarget(getPomodoroTargetKey(l.id, t));
           l.todos.splice(idx, 1);
           break;
         }
@@ -3957,12 +4030,21 @@ function saveAndRender() {
   saveLists(lists);
   render();
   renderSidebar();
+  refreshPomodoroTargets();
 }
 
 function add() {
   const text = input.value.trim();
   if (!text) return;
-  const task = { text, done: false, important: false, myDay: null, completedAt: null };
+  const task = {
+    id: 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    text,
+    done: false,
+    important: false,
+    myDay: null,
+    completedAt: null,
+    focusSeconds: 0,
+  };
   if (activeListId === 'myday') {
     task.myDay = todayStr();
     const tasksList = lists.find(l => l.id === 'tasks');
@@ -3977,9 +4059,11 @@ function add() {
 // migrate old tasks without important/myDay/dueDate
 lists.forEach(l => {
   l.todos.forEach(t => {
+    if (!t.id) t.id = 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     if (t.important === undefined) t.important = false;
     if (t.myDay === undefined) t.myDay = null;
     if (t.dueDate === undefined) t.dueDate = null;
+    t.focusSeconds = normalizeFocusSeconds(t.focusSeconds);
   });
 });
 
@@ -3989,6 +4073,15 @@ function backfillCompletedTimestamps(persist) {
 
   lists.forEach(l => {
     (l.todos || []).forEach(t => {
+      if (!t.id) {
+        t.id = 'todo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        changed = true;
+      }
+      const focusSeconds = normalizeFocusSeconds(t.focusSeconds);
+      if (t.focusSeconds !== focusSeconds) {
+        t.focusSeconds = focusSeconds;
+        changed = true;
+      }
       if (t.done && !t.completedAt) {
         t.completedAt = nowIso;
         changed = true;
@@ -4115,7 +4208,13 @@ input.addEventListener('keydown', e => {
   if (e.key === 'Enter') add();
 });
 
-clearDoneBtn.addEventListener('click', () => {
+clearDoneBtn.addEventListener('click', async () => {
+  if (pomodoroState.targetKey) {
+    const activeTarget = await resolvePomodoroTarget(pomodoroState.targetKey);
+    if (activeTarget && activeTarget.kind === 'todo' && activeTarget.record.done) {
+      await stopPomodoroForTarget(pomodoroState.targetKey);
+    }
+  }
   if (isSmartList(activeListId)) {
     lists.forEach(l => {
       l.todos = l.todos.filter(t => !t.done);
@@ -4380,6 +4479,378 @@ roadmapFileInput.addEventListener('change', () => {
     roadmapFileInput.value = '';
   });
 });
+
+// ── Floating Pomodoro timer ──
+const POMODORO_STATE_KEY = 'pomodoroState';
+let pomodoroTickTimer = null;
+let pomodoroTargets = [];
+
+function createPomodoroState(source) {
+  const state = source && typeof source === 'object' ? source : {};
+  const focusMinutes = Math.min(180, Math.max(1, Math.round(Number(state.focusMinutes) || 25)));
+  const breakMinutes = Math.min(60, Math.max(1, Math.round(Number(state.breakMinutes) || 5)));
+  const phase = state.phase === 'break' ? 'break' : 'focus';
+  const defaultSeconds = (phase === 'break' ? breakMinutes : focusMinutes) * 60;
+  const savedRemaining = Number(state.remainingSeconds);
+  return {
+    targetKey: typeof state.targetKey === 'string' ? state.targetKey : '',
+    targetLabel: typeof state.targetLabel === 'string' ? state.targetLabel : '',
+    phase,
+    focusMinutes,
+    breakMinutes,
+    remainingSeconds: Number.isFinite(savedRemaining)
+      ? Math.min(defaultSeconds, Math.max(0, Math.round(savedRemaining)))
+      : defaultSeconds,
+    running: Boolean(state.running),
+    startedAt: typeof state.startedAt === 'string' ? state.startedAt : '',
+    minimized: Boolean(state.minimized),
+  };
+}
+
+function loadPomodoroState() {
+  try {
+    return createPomodoroState(JSON.parse(localStorage.getItem(POMODORO_STATE_KEY)));
+  } catch (error) {
+    return createPomodoroState();
+  }
+}
+
+let pomodoroState = loadPomodoroState();
+
+function savePomodoroState() {
+  localStorage.setItem(POMODORO_STATE_KEY, JSON.stringify(pomodoroState));
+}
+
+function getPomodoroTargetKey(listId, todo) {
+  return `todo:${listId}:${todo.id}`;
+}
+
+function getPomodoroRemainingSeconds() {
+  if (!pomodoroState.running || !pomodoroState.startedAt) return pomodoroState.remainingSeconds;
+  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(pomodoroState.startedAt).getTime()) / 1000));
+  return Math.max(0, pomodoroState.remainingSeconds - elapsed);
+}
+
+function getPomodoroTargetLabel() {
+  const target = pomodoroTargets.find(item => item.key === pomodoroState.targetKey);
+  return target ? target.label : pomodoroState.targetLabel;
+}
+
+async function collectPomodoroTargets() {
+  const targets = [];
+  lists.forEach(listItem => {
+    (listItem.todos || []).forEach(todo => {
+      if (!todo.done) {
+        targets.push({
+          key: getPomodoroTargetKey(listItem.id, todo),
+          label: todo.text,
+          group: `任务 · ${listItem.name}`,
+          kind: 'todo',
+        });
+      }
+    });
+  });
+  videoCollections.forEach(collection => {
+    (collection.videos || []).forEach(video => {
+      if (!video.done) {
+        targets.push({
+          key: `video:${collection.id}:${video.id}`,
+          label: video.title,
+          group: `视频 · ${collection.name}`,
+          kind: 'video',
+        });
+      }
+    });
+  });
+  try {
+    const documents = await listAllLocalPdfs();
+    documents.filter(pdfDocument => !pdfDocument.done).forEach(pdfDocument => {
+      targets.push({
+        key: `pdf:${pdfDocument.id}`,
+        label: pdfDocument.title,
+        group: '本地 PDF',
+        kind: 'pdf',
+      });
+    });
+  } catch (error) {
+    console.warn('Failed to load PDF pomodoro targets:', error);
+  }
+  return targets;
+}
+
+function populatePomodoroTargetSelect() {
+  const currentKey = pomodoroState.targetKey;
+  pomodoroTargetSelect.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = pomodoroTargets.length ? '选择一个待办事项' : '没有可专注的待办事项';
+  pomodoroTargetSelect.appendChild(placeholder);
+  const groups = new Map();
+  pomodoroTargets.forEach(target => {
+    if (!groups.has(target.group)) groups.set(target.group, []);
+    groups.get(target.group).push(target);
+  });
+  groups.forEach((targets, groupName) => {
+    const group = document.createElement('optgroup');
+    group.label = groupName;
+    targets.forEach(target => {
+      const option = document.createElement('option');
+      option.value = target.key;
+      option.textContent = target.label;
+      group.appendChild(option);
+    });
+    pomodoroTargetSelect.appendChild(group);
+  });
+  pomodoroTargetSelect.value = pomodoroTargets.some(target => target.key === currentKey) ? currentKey : '';
+}
+
+async function refreshPomodoroTargets() {
+  pomodoroTargets = await collectPomodoroTargets();
+  populatePomodoroTargetSelect();
+  renderPomodoroWidget();
+}
+
+async function resolvePomodoroTarget(key) {
+  if (!key) return null;
+  const [kind, parentId, itemId] = key.split(':');
+  if (kind === 'todo') {
+    const sourceList = lists.find(listItem => listItem.id === parentId);
+    const todo = sourceList && (sourceList.todos || []).find(item => item.id === itemId);
+    return todo ? { kind, record: todo, list: sourceList, key, label: todo.text } : null;
+  }
+  if (kind === 'video') {
+    const collection = videoCollections.find(item => item.id === parentId);
+    const video = collection && (collection.videos || []).find(item => item.id === itemId);
+    return video ? { kind, record: video, collection, key, label: video.title } : null;
+  }
+  if (kind === 'pdf') {
+    const pdfDocument = await getLocalPdf(parentId);
+    return pdfDocument ? { kind, record: pdfDocument, key, label: pdfDocument.title } : null;
+  }
+  return null;
+}
+
+async function addPomodoroFocusSeconds(key, seconds) {
+  const amount = normalizeFocusSeconds(seconds);
+  if (!amount || !key) return null;
+  const target = await resolvePomodoroTarget(key);
+  if (!target) return null;
+  target.record.focusSeconds = normalizeFocusSeconds(target.record.focusSeconds) + amount;
+  if (target.kind === 'todo') saveLists(lists);
+  else if (target.kind === 'video') saveVideoCollections();
+  else await saveLocalPdf({ ...target.record, updatedAt: new Date().toISOString() });
+  return target;
+}
+
+async function markPomodoroTargetDone(key) {
+  const target = await resolvePomodoroTarget(key);
+  if (!target) return null;
+  const completedAt = new Date().toISOString();
+  if (target.kind === 'todo') {
+    target.record.done = true;
+    target.record.completedAt = target.record.completedAt || completedAt;
+    saveLists(lists);
+  } else if (target.kind === 'video') {
+    target.record.progressPercent = 100;
+    target.record.done = true;
+    target.record.completedAt = target.record.completedAt || completedAt;
+    target.record.updatedAt = completedAt;
+    saveVideoCollections();
+  } else {
+    await saveLocalPdf({ ...target.record, done: true, completedAt: target.record.completedAt || completedAt, updatedAt: completedAt });
+  }
+  return target;
+}
+
+async function pausePomodoro({ render = true } = {}) {
+  if (!pomodoroState.running) return;
+  const remaining = getPomodoroRemainingSeconds();
+  const elapsed = Math.max(0, pomodoroState.remainingSeconds - remaining);
+  pomodoroState.remainingSeconds = remaining;
+  pomodoroState.running = false;
+  pomodoroState.startedAt = '';
+  if (pomodoroState.phase === 'focus' && elapsed) await addPomodoroFocusSeconds(pomodoroState.targetKey, elapsed);
+  savePomodoroState();
+  if (render) {
+    render();
+    renderSidebar();
+    refreshPomodoroTargets();
+  }
+}
+
+function startPomodoro() {
+  if (pomodoroState.phase === 'focus' && !pomodoroState.targetKey) {
+    alert('请先选择一个待办事项。');
+    return;
+  }
+  pomodoroState.running = true;
+  pomodoroState.startedAt = new Date().toISOString();
+  savePomodoroState();
+  startPomodoroTicker();
+  renderPomodoroWidget();
+}
+
+function setPomodoroFocusPhase() {
+  pomodoroState.phase = 'focus';
+  pomodoroState.remainingSeconds = pomodoroState.focusMinutes * 60;
+  pomodoroState.running = false;
+  pomodoroState.startedAt = '';
+}
+
+function setPomodoroBreakPhase() {
+  pomodoroState.phase = 'break';
+  pomodoroState.remainingSeconds = pomodoroState.breakMinutes * 60;
+  pomodoroState.running = false;
+  pomodoroState.startedAt = '';
+}
+
+async function finishPomodoroFocus() {
+  if (pomodoroState.phase !== 'focus') return;
+  await pausePomodoro({ render: false });
+  pomodoroState.remainingSeconds = 0;
+  const targetLabel = getPomodoroTargetLabel();
+  const targetKey = pomodoroState.targetKey;
+  if (targetKey) {
+    ding();
+    const shouldComplete = confirm(`本轮专注完成。要将“${targetLabel || '当前任务'}”标记为已完成吗？`);
+    if (shouldComplete) {
+      const target = await markPomodoroTargetDone(targetKey);
+      if (target) {
+        ding();
+        pomodoroState.targetKey = '';
+        pomodoroState.targetLabel = '';
+      }
+    }
+  }
+  setPomodoroBreakPhase();
+  savePomodoroState();
+  render();
+  renderSidebar();
+  await refreshPomodoroTargets();
+}
+
+async function finishPomodoroBreak() {
+  pomodoroState.running = false;
+  pomodoroState.startedAt = '';
+  setPomodoroFocusPhase();
+  savePomodoroState();
+  await refreshPomodoroTargets();
+}
+
+async function stopPomodoroForTarget(key) {
+  if (!key || pomodoroState.targetKey !== key) return;
+  await pausePomodoro({ render: false });
+  pomodoroState.targetKey = '';
+  pomodoroState.targetLabel = '';
+  setPomodoroFocusPhase();
+  savePomodoroState();
+  renderPomodoroWidget();
+}
+
+function startPomodoroTicker() {
+  if (pomodoroTickTimer) return;
+  pomodoroTickTimer = window.setInterval(async () => {
+    const remaining = getPomodoroRemainingSeconds();
+    if (remaining > 0) {
+      renderPomodoroWidget();
+      return;
+    }
+    window.clearInterval(pomodoroTickTimer);
+    pomodoroTickTimer = null;
+    if (pomodoroState.phase === 'focus') await finishPomodoroFocus();
+    else await finishPomodoroBreak();
+  }, 500);
+}
+
+function renderPomodoroWidget() {
+  const remaining = getPomodoroRemainingSeconds();
+  const isBreak = pomodoroState.phase === 'break';
+  pomodoroWidget.classList.toggle('break-phase', isBreak);
+  pomodoroWidget.classList.toggle('minimized', pomodoroState.minimized);
+  pomodoroHeading.textContent = isBreak ? '休息时间' : '番茄钟';
+  pomodoroPhaseLabel.textContent = isBreak
+    ? (pomodoroState.running ? '放松一下，再继续前进' : '休息暂停中')
+    : (getPomodoroTargetLabel() || '选择任务后开始专注');
+  pomodoroClock.textContent = formatDuration(remaining);
+  pomodoroFocusMinutes.value = String(pomodoroState.focusMinutes);
+  pomodoroBreakMinutes.value = String(pomodoroState.breakMinutes);
+  pomodoroTargetSelect.disabled = pomodoroState.running || isBreak;
+  pomodoroFocusMinutes.disabled = pomodoroState.running;
+  pomodoroBreakMinutes.disabled = pomodoroState.running;
+  pomodoroStartBtn.textContent = pomodoroState.running ? '暂停' : (remaining < (isBreak ? pomodoroState.breakMinutes : pomodoroState.focusMinutes) * 60 ? '继续' : (isBreak ? '开始休息' : '开始专注'));
+  pomodoroEndBtn.textContent = isBreak ? '结束休息' : '结束本轮';
+  pomodoroSkipBtn.hidden = !isBreak;
+  pomodoroNote.textContent = pomodoroState.running
+    ? (isBreak ? '休息不计入专注时长。' : '暂停或结束本轮时会保存实际专注用时。')
+    : '本机计时；普通任务和视频的累计专注时长会同步。';
+}
+
+function openPomodoroWidget() {
+  pomodoroWidget.hidden = false;
+  pomodoroState.minimized = false;
+  savePomodoroState();
+  renderPomodoroWidget();
+  refreshPomodoroTargets();
+}
+
+pomodoroBtn.addEventListener('click', openPomodoroWidget);
+pomodoroTargetSelect.addEventListener('change', () => {
+  const target = pomodoroTargets.find(item => item.key === pomodoroTargetSelect.value);
+  pomodoroState.targetKey = target ? target.key : '';
+  pomodoroState.targetLabel = target ? target.label : '';
+  setPomodoroFocusPhase();
+  savePomodoroState();
+  renderPomodoroWidget();
+});
+pomodoroStartBtn.addEventListener('click', () => {
+  if (pomodoroState.running) pausePomodoro();
+  else startPomodoro();
+});
+pomodoroEndBtn.addEventListener('click', () => {
+  if (pomodoroState.phase === 'focus') finishPomodoroFocus();
+  else finishPomodoroBreak();
+});
+pomodoroSkipBtn.addEventListener('click', finishPomodoroBreak);
+pomodoroMinimizeBtn.addEventListener('click', () => {
+  pomodoroState.minimized = true;
+  savePomodoroState();
+  renderPomodoroWidget();
+});
+pomodoroRestoreBtn.addEventListener('click', () => {
+  pomodoroState.minimized = false;
+  savePomodoroState();
+  renderPomodoroWidget();
+});
+pomodoroCloseBtn.addEventListener('click', async () => {
+  await pausePomodoro({ render: false });
+  pomodoroWidget.hidden = true;
+  render();
+  renderSidebar();
+  refreshPomodoroTargets();
+});
+
+function updatePomodoroDuration(input, kind) {
+  if (pomodoroState.running) return;
+  const max = kind === 'focus' ? 180 : 60;
+  const fallback = kind === 'focus' ? pomodoroState.focusMinutes : pomodoroState.breakMinutes;
+  const minutes = Math.min(max, Math.max(1, Math.round(Number(input.value) || fallback)));
+  if (kind === 'focus') pomodoroState.focusMinutes = minutes;
+  else pomodoroState.breakMinutes = minutes;
+  if ((kind === 'focus' && pomodoroState.phase === 'focus') || (kind === 'break' && pomodoroState.phase === 'break')) {
+    pomodoroState.remainingSeconds = minutes * 60;
+  }
+  savePomodoroState();
+  renderPomodoroWidget();
+}
+
+pomodoroFocusMinutes.addEventListener('change', () => updatePomodoroDuration(pomodoroFocusMinutes, 'focus'));
+pomodoroBreakMinutes.addEventListener('change', () => updatePomodoroDuration(pomodoroBreakMinutes, 'break'));
+renderPomodoroWidget();
+if (pomodoroState.running) {
+  pomodoroWidget.hidden = false;
+  startPomodoroTicker();
+  refreshPomodoroTargets();
+}
 
 // init
 switchToList(activeListId);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Microsoft To Do</title>
-  <link rel="stylesheet" href="styles.css?v=20260916-video-time-progress">
+  <link rel="stylesheet" href="styles.css?v=20260916-pomodoro">
 </head>
 <body>
   <div class="app">
@@ -97,6 +97,7 @@
       <div class="hero" id="hero">
         <h1 id="listTitle">任务</h1>
         <div class="subtitle" id="dateLabel"></div>
+        <button class="pomodoro-entry-btn" id="pomodoroBtn" title="打开番茄钟" aria-label="打开番茄钟">&#9201;</button>
         <button class="ai-summary-btn" id="aiSummaryBtn" title="AI 总结">AI</button>
         <button class="bg-btn" id="bgBtn" title="更换背景">🖼</button>
       </div>
@@ -155,7 +156,38 @@
     </section>
   </div>
 
+  <aside class="pomodoro-widget" id="pomodoroWidget" hidden aria-live="polite">
+    <div class="pomodoro-head">
+      <div>
+        <strong id="pomodoroHeading">番茄钟</strong>
+        <span id="pomodoroPhaseLabel">选择任务后开始专注</span>
+      </div>
+      <div class="pomodoro-head-actions">
+        <button type="button" id="pomodoroMinimizeBtn" title="最小化" aria-label="最小化">&#8722;</button>
+        <button type="button" id="pomodoroCloseBtn" title="关闭番茄钟" aria-label="关闭番茄钟">&#215;</button>
+      </div>
+    </div>
+    <div class="pomodoro-body">
+      <label class="pomodoro-target-field">
+        <span>专注任务</span>
+        <select id="pomodoroTargetSelect"></select>
+      </label>
+      <div class="pomodoro-clock" id="pomodoroClock">25:00</div>
+      <div class="pomodoro-durations">
+        <label><span>专注</span><input id="pomodoroFocusMinutes" type="number" min="1" max="180" inputmode="numeric"><em>分钟</em></label>
+        <label><span>休息</span><input id="pomodoroBreakMinutes" type="number" min="1" max="60" inputmode="numeric"><em>分钟</em></label>
+      </div>
+      <div class="pomodoro-controls">
+        <button type="button" class="pomodoro-primary" id="pomodoroStartBtn">开始专注</button>
+        <button type="button" id="pomodoroEndBtn">结束本轮</button>
+        <button type="button" id="pomodoroSkipBtn" hidden>跳过休息</button>
+      </div>
+      <p class="pomodoro-note" id="pomodoroNote">本机计时；普通任务和视频的累计专注时长会同步。</p>
+    </div>
+    <button type="button" class="pomodoro-restore-btn" id="pomodoroRestoreBtn">&#9201; 番茄钟</button>
+  </aside>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="app.js?v=20260916-video-time-progress"></script>
+  <script src="app.js?v=20260916-pomodoro"></script>
 </body>
 </html>
