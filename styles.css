@@ -971,6 +971,7 @@ body {
 .local-pdf-focus-time { margin-top: 5px; }
 
 @media (max-width: 760px) {
+  .daily-time-allocation-legend { grid-template-columns: 1fr; }
   .hero .pomodoro-entry-btn { right: 108px; }
   .pomodoro-widget { right: 14px; bottom: 14px; }
 }
@@ -1521,6 +1522,144 @@ body {
 .suggestions {
   border-bottom: 1px solid var(--border-divider);
   padding: 12px 16px;
+}
+
+.daily-time-allocation {
+  position: relative;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--border-divider);
+}
+
+.daily-time-allocation-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.daily-time-allocation-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.daily-time-allocation-head span,
+.daily-time-allocation-empty {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.daily-time-allocation-bar {
+  display: flex;
+  width: 100%;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-divider);
+}
+
+.daily-time-allocation-segment {
+  min-width: 2px;
+  cursor: default;
+  transition: flex-grow 0.25s ease;
+}
+
+.daily-time-allocation-segment:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+.daily-time-allocation-segment + .daily-time-allocation-segment {
+  border-left: 2px solid rgba(var(--card-rgb), 0.72);
+}
+
+.daily-time-allocation-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin-top: 12px;
+}
+
+.daily-time-allocation-legend-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.daily-time-allocation-legend-item > span:first-child {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.daily-time-allocation-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daily-time-allocation-value {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.daily-time-allocation-empty { padding: 4px 0 1px; }
+
+.daily-time-allocation-tooltip {
+  position: absolute;
+  z-index: 5;
+  width: min(280px, calc(100% - 24px));
+  padding: 9px 10px;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  background: rgba(var(--card-rgb), 0.98);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.daily-time-allocation-tooltip strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.daily-time-allocation-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.daily-time-allocation-tooltip-row span {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.daily-time-allocation-tooltip-row em,
+.daily-time-allocation-tooltip-more {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.daily-time-allocation-tooltip-more {
+  display: block;
+  margin-top: 5px;
 }
 
 .suggestions .suggest-label {

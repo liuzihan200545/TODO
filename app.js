@@ -568,6 +568,50 @@ function saveAiData() {
 let aiSettings = loadAiSettings();
 let aiSummaries = loadAiSummaries();
 
+const POMODORO_SESSIONS_KEY = 'pomodoroSessions';
+const POMODORO_LOCAL_SESSIONS_KEY = 'pomodoroLocalSessions';
+
+function getLocalDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function normalizePomodoroSession(session) {
+  session = session || {};
+  const seconds = normalizeFocusSeconds(session.seconds);
+  if (!seconds) return null;
+  return {
+    id: session.id || 'pomodoro_session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    dateKey: /^\d{4}-\d{2}-\d{2}$/.test(String(session.dateKey || '')) ? session.dateKey : getLocalDateKey(),
+    label: String(session.label || '未命名任务'),
+    group: String(session.group || '其他专注'),
+    seconds,
+    createdAt: session.createdAt || new Date().toISOString(),
+  };
+}
+
+function loadPomodoroSessions(key) {
+  try {
+    const sessions = JSON.parse(localStorage.getItem(key)) || [];
+    return Array.isArray(sessions) ? sessions.map(normalizePomodoroSession).filter(Boolean).slice(-1000) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function savePomodoroSessions() {
+  pomodoroSessions = pomodoroSessions.map(normalizePomodoroSession).filter(Boolean).slice(-1000);
+  localStorage.setItem(POMODORO_SESSIONS_KEY, JSON.stringify(pomodoroSessions));
+  scheduleCloudSync();
+}
+
+function saveLocalPomodoroSessions() {
+  localPomodoroSessions = localPomodoroSessions.map(normalizePomodoroSession).filter(Boolean).slice(-1000);
+  localStorage.setItem(POMODORO_LOCAL_SESSIONS_KEY, JSON.stringify(localPomodoroSessions));
+}
+
+let pomodoroSessions = loadPomodoroSessions(POMODORO_SESSIONS_KEY);
+let localPomodoroSessions = loadPomodoroSessions(POMODORO_LOCAL_SESSIONS_KEY);
+
 function clampPercent(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
@@ -3703,6 +3747,145 @@ function renderMonthCalendar() {
   countEl.textContent = `${stats.done}/${stats.total} 已完成 · ${stats.percent}%`;
 }
 
+function formatAllocationDuration(seconds) {
+  const total = normalizeFocusSeconds(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (hours && minutes) return `${hours}小时${minutes}分`;
+  if (hours) return `${hours}小时`;
+  if (minutes) return `${minutes}分`;
+  return total ? `${total}秒` : '0分';
+}
+
+function getAllocationColor(index) {
+  return ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb7185', '#22d3ee'][index % 7];
+}
+
+function renderDailyTimeAllocation() {
+  const section = document.createElement('section');
+  section.className = 'daily-time-allocation';
+  const dayKey = getLocalDateKey();
+  const sessions = [...pomodoroSessions, ...localPomodoroSessions].filter(session => session.dateKey === dayKey);
+  const total = sessions.reduce((sum, session) => sum + normalizeFocusSeconds(session.seconds), 0);
+  const header = document.createElement('div');
+  header.className = 'daily-time-allocation-head';
+  const title = document.createElement('strong');
+  title.textContent = '今日时间分配';
+  const summary = document.createElement('span');
+  summary.textContent = total ? `专注 ${formatAllocationDuration(total)}` : '还没有专注记录';
+  header.appendChild(title);
+  header.appendChild(summary);
+  section.appendChild(header);
+
+  if (!total) {
+    const empty = document.createElement('div');
+    empty.className = 'daily-time-allocation-empty';
+    empty.textContent = '开始一个番茄钟后，这里会按实际用时显示今天的时间分配。';
+    section.appendChild(empty);
+    return section;
+  }
+
+  const groups = new Map();
+  sessions.forEach(session => {
+    const key = session.group || '其他专注';
+    const seconds = normalizeFocusSeconds(session.seconds);
+    if (!groups.has(key)) {
+      groups.set(key, { name: key, seconds: 0, projects: new Map() });
+    }
+    const entry = groups.get(key);
+    const projectName = session.label || '未命名项目';
+    entry.seconds += seconds;
+    entry.projects.set(projectName, (entry.projects.get(projectName) || 0) + seconds);
+  });
+  const entries = [...groups.values()].sort((a, b) => b.seconds - a.seconds);
+  const bar = document.createElement('div');
+  bar.className = 'daily-time-allocation-bar';
+  const tooltip = document.createElement('div');
+  tooltip.className = 'daily-time-allocation-tooltip';
+  tooltip.hidden = true;
+
+  const hideTooltip = () => {
+    tooltip.hidden = true;
+  };
+  const showTooltip = (entry, segment) => {
+    tooltip.replaceChildren();
+    const heading = document.createElement('strong');
+    heading.textContent = `${entry.name} · ${formatAllocationDuration(entry.seconds)}`;
+    tooltip.appendChild(heading);
+
+    [...entry.projects.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .forEach(([projectName, seconds]) => {
+        const row = document.createElement('div');
+        row.className = 'daily-time-allocation-tooltip-row';
+        const name = document.createElement('span');
+        name.textContent = projectName;
+        const time = document.createElement('em');
+        time.textContent = formatAllocationDuration(seconds);
+        row.append(name, time);
+        tooltip.appendChild(row);
+      });
+
+    if (entry.projects.size > 6) {
+      const more = document.createElement('span');
+      more.className = 'daily-time-allocation-tooltip-more';
+      more.textContent = `另有 ${entry.projects.size - 6} 个项目`;
+      tooltip.appendChild(more);
+    }
+
+    const sectionRect = section.getBoundingClientRect();
+    const segmentRect = segment.getBoundingClientRect();
+    const center = segmentRect.left - sectionRect.left + (segmentRect.width / 2);
+    tooltip.style.left = `${Math.max(12, Math.min(section.clientWidth - 12, center))}px`;
+    tooltip.style.top = `${bar.offsetTop + bar.offsetHeight + 8}px`;
+    tooltip.hidden = false;
+  };
+
+  entries.forEach((entry, index) => {
+    const percent = (entry.seconds / total) * 100;
+    const segment = document.createElement('span');
+    segment.className = 'daily-time-allocation-segment';
+    segment.style.flexGrow = String(entry.seconds);
+    segment.style.backgroundColor = getAllocationColor(index);
+    const projectDetails = [...entry.projects.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, seconds]) => `${name} · ${formatAllocationDuration(seconds)}`)
+      .join('\n');
+    segment.tabIndex = 0;
+    segment.setAttribute('aria-label', `${entry.name}，${projectDetails}`);
+    segment.title = `${entry.name} · ${formatAllocationDuration(entry.seconds)} · ${Math.round(percent)}%\n${projectDetails}`;
+    segment.addEventListener('mouseenter', () => showTooltip(entry, segment));
+    segment.addEventListener('mouseleave', hideTooltip);
+    segment.addEventListener('focus', () => showTooltip(entry, segment));
+    segment.addEventListener('blur', hideTooltip);
+    bar.appendChild(segment);
+  });
+  section.appendChild(bar);
+
+  const legend = document.createElement('div');
+  legend.className = 'daily-time-allocation-legend';
+  entries.forEach((entry, index) => {
+    const item = document.createElement('div');
+    item.className = 'daily-time-allocation-legend-item';
+    const dot = document.createElement('span');
+    dot.style.backgroundColor = getAllocationColor(index);
+    const name = document.createElement('span');
+    name.className = 'daily-time-allocation-name';
+    name.textContent = entry.name;
+    const time = document.createElement('span');
+    time.className = 'daily-time-allocation-value';
+    time.textContent = `${formatAllocationDuration(entry.seconds)} · ${Math.round((entry.seconds / total) * 100)}%`;
+    item.appendChild(dot);
+    item.appendChild(name);
+    item.appendChild(time);
+    legend.appendChild(item);
+  });
+  section.appendChild(legend);
+  section.appendChild(tooltip);
+  return section;
+}
+
 function render() {
   list.innerHTML = '';
   clearDoneBtn.style.display = '';
@@ -3729,6 +3912,7 @@ function render() {
 
   // ── My Day suggestions ──
   if (activeListId === 'myday' && !searchQuery) {
+    list.appendChild(renderDailyTimeAllocation());
     // gather suggestions: non-done tasks not already in myday
     const suggestions = [];
     lists.forEach(l => {
@@ -3861,11 +4045,12 @@ function render() {
       });
       list.appendChild(suggestDiv);
     } else if (visible.length === 0 && videoEntries.length === 0) {
-      list.innerHTML = `<div class="empty-state">
-        <div class="emoji">☀️</div>
+      const emptyState = document.createElement('div');
+      emptyState.className = 'empty-state';
+      emptyState.innerHTML = `<div class="emoji">☀️</div>
         <div>今天所有任务都已加入</div>
-        <div class="hint">在下方添加新任务吧</div>
-      </div>`;
+        <div class="hint">在下方添加新任务吧</div>`;
+      list.appendChild(emptyState);
     }
   }
 
@@ -4676,7 +4861,29 @@ async function addPomodoroFocusSeconds(key, seconds) {
   if (target.kind === 'todo') saveLists(lists);
   else if (target.kind === 'video') saveVideoCollections();
   else await saveLocalPdf({ ...target.record, updatedAt: new Date().toISOString() });
+  recordPomodoroSession(target, amount);
   return target;
+}
+
+function recordPomodoroSession(target, seconds) {
+  const session = normalizePomodoroSession({
+    id: 'pomodoro_session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    dateKey: getLocalDateKey(),
+    label: target.label,
+    group: target.kind === 'todo'
+      ? (target.list.name === '任务' ? '任务' : `任务 · ${target.list.name}`)
+      : (target.kind === 'video' ? `视频 · ${target.collection.name}` : '本地 PDF'),
+    seconds,
+    createdAt: new Date().toISOString(),
+  });
+  if (!session) return;
+  if (target.kind === 'pdf') {
+    localPomodoroSessions.push(session);
+    saveLocalPomodoroSessions();
+  } else {
+    pomodoroSessions.push(session);
+    savePomodoroSessions();
+  }
 }
 
 async function markPomodoroTargetDone(key) {
@@ -4699,7 +4906,7 @@ async function markPomodoroTargetDone(key) {
   return target;
 }
 
-async function pausePomodoro({ render = true } = {}) {
+async function pausePomodoro({ render: shouldRender = true } = {}) {
   if (!pomodoroState.running) return;
   const remaining = getPomodoroRemainingSeconds();
   const elapsed = Math.max(0, pomodoroState.remainingSeconds - remaining);
@@ -4708,7 +4915,7 @@ async function pausePomodoro({ render = true } = {}) {
   pomodoroState.startedAt = '';
   if (pomodoroState.phase === 'focus' && elapsed) await addPomodoroFocusSeconds(pomodoroState.targetKey, elapsed);
   savePomodoroState();
-  if (render) {
+  if (shouldRender) {
     render();
     renderSidebar();
     refreshPomodoroTargets();
@@ -5222,6 +5429,7 @@ function buildSnapshot() {
     videoCollections: videoCollections.map(normalizeVideoCollection),
     calendarProjects: calendarProjects.map(normalizeCalendarProject),
     aiSummaries: aiSummaries.map(normalizeAiSummary),
+    pomodoroSessions: pomodoroSessions.map(normalizePomodoroSession).filter(Boolean),
     settings: {
       theme: getTheme(),
       username: usernameEl.textContent || 'Lenovo',
@@ -5249,6 +5457,7 @@ function hasLocalUserData(snapshot) {
   const hasVideoCollections = Array.isArray(snapshot.videoCollections) && snapshot.videoCollections.length > 0;
   const hasCalendars = Array.isArray(snapshot.calendarProjects) && snapshot.calendarProjects.length > 0;
   const hasAiSummaries = Array.isArray(snapshot.aiSummaries) && snapshot.aiSummaries.length > 0;
+  const hasPomodoroSessions = Array.isArray(snapshot.pomodoroSessions) && snapshot.pomodoroSessions.length > 0;
   const settings = snapshot.settings;
   const hasCustomSettings = settings.username !== 'Lenovo'
     || settings.theme !== (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
@@ -5259,7 +5468,7 @@ function hasLocalUserData(snapshot) {
     || settings.cardBlur !== '8'
     || JSON.stringify(settings.sidebarLabels || DEFAULT_SIDEBAR_LABELS) !== JSON.stringify(DEFAULT_SIDEBAR_LABELS)
     || !!(settings.aiSettings && settings.aiSettings.deepseekApiKey);
-  return hasTodos || hasRoadmaps || hasVideos || hasVideoCollections || hasCalendars || hasAiSummaries || hasCustomSettings;
+  return hasTodos || hasRoadmaps || hasVideos || hasVideoCollections || hasCalendars || hasAiSummaries || hasPomodoroSessions || hasCustomSettings;
 }
 
 function saveLocalSnapshot(snapshot) {
@@ -5284,6 +5493,9 @@ function applySnapshot(snapshot) {
     videoProjects = videoCollections.flatMap(collection => collection.videos);
     calendarProjects = Array.isArray(snapshot.calendarProjects) ? snapshot.calendarProjects.map(normalizeCalendarProject) : [];
     aiSummaries = Array.isArray(snapshot.aiSummaries) ? snapshot.aiSummaries.map(normalizeAiSummary) : [];
+    pomodoroSessions = Array.isArray(snapshot.pomodoroSessions)
+      ? snapshot.pomodoroSessions.map(normalizePomodoroSession).filter(Boolean).slice(-1000)
+      : [];
     aiSettings = {
       ...loadAiSettings(),
       ...(settings.aiSettings || {}),
@@ -5297,6 +5509,7 @@ function applySnapshot(snapshot) {
     localStorage.setItem('videoCollections', JSON.stringify(videoCollections));
     localStorage.setItem('calendarProjects', JSON.stringify(calendarProjects));
     localStorage.setItem('aiSummaries', JSON.stringify(aiSummaries));
+    localStorage.setItem(POMODORO_SESSIONS_KEY, JSON.stringify(pomodoroSessions));
     localStorage.setItem('aiSettings', JSON.stringify(aiSettings));
 
     if (settings.theme) applyTheme(settings.theme);
